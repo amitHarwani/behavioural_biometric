@@ -133,11 +133,19 @@ def clean_keystroke_data(key_csv: pd.DataFrame):
     return key_csv
 
 def clean_touch_data(touch_csv: pd.DataFrame):
-     # Dropping NA values (Seen in init_analysis that the dataset has 2 rows of NA values across users and sessions)
+    # Converting event_time column to numeric
+    touch_csv["event_time"] = pd.to_numeric(touch_csv["event_time"], errors='coerce')
+
+    # Dropping NA values (Seen in init_analysis that the dataset has 2 rows of NA values across users and sessions)
     touch_csv.dropna(inplace=True, ignore_index=True)
 
-    # Converting event_time column to numeric
-    touch_csv["event_time"] = pd.to_numeric(touch_csv["event_time"])
+    # Finding event time indices which are not increasing (Seen in init analysis)
+    non_increasing_event_times = touch_csv[touch_csv["event_time"].diff() < 0].index.tolist()
+    if len(non_increasing_event_times) > 0:
+        # Removing incorrect event time rows and resetting the index
+        for index in non_increasing_event_times:
+            touch_csv.drop(index=(index - 1), inplace=True)
+        touch_csv.reset_index(drop=True, inplace=True)
 
     # Incorrect event time indices, the value provided is the highest valid timestamp in the dataset (Identified in init_analysis)
     indices_with_incorrect_timestamps = touch_csv[touch_csv["event_time"] > 1402767052230.0]["event_time"].sort_index().index
@@ -341,7 +349,7 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         # Once number of windows gathered equals sequence length
         if count_of_current_windows == SEQUENCE_LENGTH:
             # Concatenate the windows row wise (Time-Series) and append to sequences list (10, 62)
-            sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
+            sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True).to_numpy())
             # Reset the values
             current_sequence = []
             count_of_current_windows = 0
@@ -454,7 +462,7 @@ def main():
 
 if __name__ == "__main__": 
     TRAIN_TEST_SPLIT_RANDOM_STATE = 42 # Random state for train test split
-    CPU_COUNT = multiprocessing.cpu_count() // 2 # Number of CPU Cores available
+    CPU_COUNT = multiprocessing.cpu_count() # Number of CPU Cores available
 
     main()
 
