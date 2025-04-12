@@ -26,6 +26,7 @@ import pandas as pd
 import numpy as np
 import multiprocessing
 import time
+import pickle
 from sklearn.model_selection import train_test_split
 
 
@@ -90,6 +91,11 @@ def check_pair_order(df, index):
             df.loc[index + 1] = temp
 
 def clean_keystroke_data(key_csv: pd.DataFrame):
+
+    # Empty Data, return a dataframe with the updated cols list to align with the scenario when dataframe is not empty
+    if key_csv.empty: 
+        return pd.DataFrame(columns=["press_time", "key_code", "release_time"])
+    
     # Removing keystrokes where keycode is less than 0 or greater than 255
     key_csv.drop(index=key_csv[key_csv["key_code"] < 0].index, inplace=True)
     key_csv.drop(index=key_csv[key_csv["key_code"] > 255].index, inplace=True)
@@ -124,6 +130,7 @@ def clean_keystroke_data(key_csv: pd.DataFrame):
     assert key_csv.shape[0] % 2 == 0, "Keystroke data doesn't have equal pairs"
 
     shrink_key_pairs(key_csv)
+    return key_csv
 
 def clean_touch_data(touch_csv: pd.DataFrame):
      # Dropping NA values (Seen in init_analysis that the dataset has 2 rows of NA values across users and sessions)
@@ -143,6 +150,11 @@ def clean_touch_data(touch_csv: pd.DataFrame):
 def extract_keystoke_features_for_window(key_csv: pd.DataFrame):
     # Key code sequences in the window, Default to 0.0 representing no key pressed
     key_code_sequences = [0.00] * MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW
+    
+    # # If the dataframe is empty return all the required cols with 0
+    if key_csv.shape[0] == 0:
+        cols = ["hl", "di_ud", "di_dd", "di_uu", "di_du", "tri_ud", "tri_dd", "tri_uu", "tri_du"] + [f"key_code{i + 1}" for i in range(len(key_code_sequences))]
+        return pd.DataFrame([[0.0] * len(cols)], columns=cols)
 
     if key_csv.shape[0] > 0:
         # Converting to int to make it generic (Based upon system type)
@@ -181,43 +193,53 @@ def extract_keystoke_features_for_window(key_csv: pd.DataFrame):
         # Adding features to the dataframe
         key_csv.loc[i, ["hl", "di_ud", "di_dd", "di_uu", "di_du", "tri_ud", "tri_dd", "tri_uu", "tri_du"]] = [hl, di_ud, di_dd, di_uu, di_du, tri_ud, tri_dd, tri_uu, tri_du]
 
-    # For empty key stroke add latency columns assign their values to 0.0, and drop columns
-    if key_csv.shape[0] == 0:
-        key_csv.loc[len(key_csv), ["hl", "di_ud", "di_dd", "di_uu", "di_du", "tri_ud", "tri_dd", "tri_uu", "tri_du"]] = [0.0] * 9
-        key_csv.drop(columns=["event_time", "press_type", "key_code"], inplace=True)
-    else:
-        # Dropping the press time, release time and key code columns
-        key_csv.drop(columns=["press_time", "release_time", "key_code"], inplace=True)
+
+    # Dropping the press time, release time and key code columns
+    key_csv.drop(columns=["press_time", "release_time", "key_code"], inplace=True)
 
     # Aggregating data of all the columns (Average), and converting it into a dataframe of 1 row.
     aggregated_key_data = key_csv.mean(axis = 0).to_frame().T
 
     # Adding the key code sequences to the data frame
-    aggregated_key_data.loc[0, [f"key_code{i}" for i in range(len(key_code_sequences))]] = key_code_sequences
+    aggregated_key_data.loc[0, [f"key_code{i + 1}" for i in range(len(key_code_sequences))]] = key_code_sequences
 
     return aggregated_key_data
 
 def extract_imu_features_for_window(imu_csv: pd.DataFrame, sensor: str):
+
+    edge_order = 2
 
     # If the dataframe is empty return all the required cols with 0
     if len(imu_csv) == 0:
         cols = ["x", "y", "z", f"{sensor}_fft_x", f"{sensor}_fft_y", f"{sensor}_fft_z", 
                 f"{sensor}_fd_x", f"{sensor}_fd_y", f"{sensor}_fd_z", f"{sensor}_sd_x", f"{sensor}_sd_y", f"{sensor}_sd_z"]
         return pd.DataFrame([[0.0] * len(cols)], columns=cols )
-        
-     # Fast fourier transform
-    imu_csv[f"{sensor}_fft_x"] = np.abs(np.fft.fft(imu_csv["x"].values))
-    imu_csv[f"{sensor}_fft_y"] = np.abs(np.fft.fft(imu_csv["y"].values))
-    imu_csv[f"{sensor}_fft_z"] = np.abs(np.fft.fft(imu_csv["z"].values))
+    
+    # If length is greater than edge order + 1 Then compute FFT and gradient (Required for gradient calc.)
+    if len(imu_csv) >= (edge_order + 1):
+        # Fast fourier transform
+        imu_csv[f"{sensor}_fft_x"] = np.abs(np.fft.fft(imu_csv["x"].values))
+        imu_csv[f"{sensor}_fft_y"] = np.abs(np.fft.fft(imu_csv["y"].values))
+        imu_csv[f"{sensor}_fft_z"] = np.abs(np.fft.fft(imu_csv["z"].values))
 
-    # First and second order derivatives
-    imu_csv[f"{sensor}_fd_x"] = np.gradient(imu_csv["x"].values, edge_order=2)
-    imu_csv[f"{sensor}_fd_y"] = np.gradient(imu_csv["y"].values, edge_order=2)
-    imu_csv[f"{sensor}_fd_z"] = np.gradient(imu_csv["z"].values, edge_order=2)
+        # First and second order derivatives
+        imu_csv[f"{sensor}_fd_x"] = np.gradient(imu_csv["x"].values, edge_order=edge_order)
+        imu_csv[f"{sensor}_fd_y"] = np.gradient(imu_csv["y"].values, edge_order=edge_order)
+        imu_csv[f"{sensor}_fd_z"] = np.gradient(imu_csv["z"].values, edge_order=edge_order)
 
-    imu_csv[f"{sensor}_sd_x"] = np.gradient(imu_csv[f"{sensor}_fd_x"].values, edge_order=2)
-    imu_csv[f"{sensor}_sd_y"] = np.gradient(imu_csv[f"{sensor}_fd_y"].values, edge_order=2)
-    imu_csv[f"{sensor}_sd_z"] = np.gradient(imu_csv[f"{sensor}_fd_z"].values, edge_order=2)
+        imu_csv[f"{sensor}_sd_x"] = np.gradient(imu_csv[f"{sensor}_fd_x"].values, edge_order=edge_order)
+        imu_csv[f"{sensor}_sd_y"] = np.gradient(imu_csv[f"{sensor}_fd_y"].values, edge_order=edge_order)
+        imu_csv[f"{sensor}_sd_z"] = np.gradient(imu_csv[f"{sensor}_fd_z"].values, edge_order=edge_order)
+    else:
+        imu_csv[f"{sensor}_fft_x"] = 0.0
+        imu_csv[f"{sensor}_fft_y"] = 0.0
+        imu_csv[f"{sensor}_fft_z"] = 0.0
+        imu_csv[f"{sensor}_fd_x"] = 0.0
+        imu_csv[f"{sensor}_fd_y"] = 0.0
+        imu_csv[f"{sensor}_fd_z"] = 0.0
+        imu_csv[f"{sensor}_sd_x"] = 0.0
+        imu_csv[f"{sensor}_sd_y"] = 0.0
+        imu_csv[f"{sensor}_sd_z"] = 0.0
 
     # Dropping the event time column
     imu_csv.drop(columns=["event_time"], inplace=True)
@@ -229,6 +251,8 @@ def extract_imu_features_for_window(imu_csv: pd.DataFrame, sensor: str):
 
 def extract_touch_features_for_window(touch_csv: pd.DataFrame):
 
+    edge_order = 2
+
     # If the dataframe is empty return all the required cols with 0
     if len(touch_csv) == 0:
         cols = ["x", "y", "pressure", "contact_size", "t_fft_x", "t_fft_y",  
@@ -236,16 +260,28 @@ def extract_touch_features_for_window(touch_csv: pd.DataFrame):
         
         return pd.DataFrame([[0.0] * len(cols)], columns=cols )
     
-    # Fast fourier transform
-    touch_csv["t_fft_x"] = np.abs(np.fft.fft(touch_csv["x"].values))
-    touch_csv["t_fft_y"] = np.abs(np.fft.fft(touch_csv["y"].values))
+    # If length is greater than edge order + 1 Then compute FFT and gradient (Required for gradient calc.)
+    if len(touch_csv) >= (edge_order + 1):
+        # Fast fourier transform
+        touch_csv["t_fft_x"] = np.abs(np.fft.fft(touch_csv["x"].values))
+        touch_csv["t_fft_y"] = np.abs(np.fft.fft(touch_csv["y"].values))
 
-    # First and second order derivatives
-    touch_csv["t_fd_x"] = np.gradient(touch_csv["x"].values, edge_order=2)
-    touch_csv["t_fd_y"] = np.gradient(touch_csv["y"].values, edge_order=2)
+        # First and second order derivatives
+        touch_csv["t_fd_x"] = np.gradient(touch_csv["x"].values, edge_order=edge_order)
+        touch_csv["t_fd_y"] = np.gradient(touch_csv["y"].values, edge_order=edge_order)
 
-    touch_csv["t_sd_x"] = np.gradient(touch_csv["t_fd_x"].values, edge_order=2)
-    touch_csv["t_sd_y"] = np.gradient(touch_csv["t_fd_y"].values, edge_order=2)
+        touch_csv["t_sd_x"] = np.gradient(touch_csv["t_fd_x"].values, edge_order=edge_order)
+        touch_csv["t_sd_y"] = np.gradient(touch_csv["t_fd_y"].values, edge_order=edge_order)
+    else:
+        touch_csv["t_fft_x"] = 0.0
+        touch_csv["t_fft_y"] = 0.0
+
+        touch_csv["t_fd_x"] = 0.0
+        touch_csv["t_fd_y"] = 0.0
+
+        touch_csv["t_sd_x"] = 0.0
+        touch_csv["t_sd_y"] = 0.0
+        
 
     # Dropping the event time column
     touch_csv.drop(columns=["event_time"], inplace=True)
@@ -259,10 +295,8 @@ def extract_touch_features_for_window(touch_csv: pd.DataFrame):
 def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.DataFrame, mag_csv: pd.DataFrame, touch_csv: pd.DataFrame, TIME_WINDOW: int, SEQUENCE_LENGTH: int):
 
     # Session start and end time = min/max of event times across modalities
-    session_start_time = min(df.at[0, "event_time"] for df in [key_csv, acc_csv, gyr_csv, mag_csv, touch_csv] if not df.empty)
-    session_end_time = max(df.iloc[-1]["event_time"] for df in [key_csv, acc_csv, gyr_csv, mag_csv, touch_csv] if not df.empty)
-    # session_start_time = min(key_csv.at[0, "event_time"], acc_csv.at[0, "event_time"], gyr_csv.at[0, "event_time"], mag_csv.at[0, "event_time"], touch_csv.at[0, "event_time"])
-    # session_end_time = max(key_csv.iloc[-1]["event_time"], acc_csv.iloc[-1]["event_time"], gyr_csv.iloc[-1]["event_time"], mag_csv.iloc[-1]["event_time"], touch_csv.iloc[-1]["event_time"])
+    session_start_time = min(df.at[0, "press_time"] if df is key_csv else df.at[0, "event_time"] for df in [key_csv, acc_csv, gyr_csv, mag_csv, touch_csv] if not df.empty)
+    session_end_time = max(df.iloc[-1]["press_time"] if df is key_csv else df.iloc[-1]["event_time"] for df in [key_csv, acc_csv, gyr_csv, mag_csv, touch_csv] if not df.empty)
 
     # Window start time initialized to session start time
     window_start_time = session_start_time
@@ -272,18 +306,17 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
     
     sequences = []
     count_of_current_windows = 0
-    current_sequence = []
-
+    current_sequence = []    
     while window_start_time < session_end_time:
         # Window end time = window start + time window length
         window_end_time = window_start_time + time_window_in_ms
 
         # Data from modalities within the time window
-        relevant_key_data = key_csv[(key_csv["event_time"] >= window_start_time) & (key_csv["event_time"] <= window_end_time)].copy()
-        relevant_acc_data = acc_csv[(acc_csv["event_time"] >= window_start_time) & (acc_csv["event_time"] <= window_end_time)].copy()
-        relevant_gyr_data = gyr_csv[(gyr_csv["event_time"] >= window_start_time) & (gyr_csv["event_time"] <= window_end_time)].copy()
-        relevant_mag_data = mag_csv[(mag_csv["event_time"] >= window_start_time) & (mag_csv["event_time"] <= window_end_time)].copy()
-        relevant_touch_data = touch_csv[(touch_csv["event_time"] >= window_start_time) & (touch_csv["event_time"] <= window_end_time)].copy()
+        relevant_key_data = key_csv[(key_csv["press_time"] >= window_start_time) & (key_csv["press_time"] <= window_end_time)].copy().reset_index(drop=True)
+        relevant_acc_data = acc_csv[(acc_csv["event_time"] >= window_start_time) & (acc_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
+        relevant_gyr_data = gyr_csv[(gyr_csv["event_time"] >= window_start_time) & (gyr_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
+        relevant_mag_data = mag_csv[(mag_csv["event_time"] >= window_start_time) & (mag_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
+        relevant_touch_data = touch_csv[(touch_csv["event_time"] >= window_start_time) & (touch_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
         
         # Returns (1, 16) - Keystroke features aggregated for the time window
         aggregated_key_data = extract_keystoke_features_for_window(relevant_key_data)
@@ -296,7 +329,7 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         # Touch features aggregated for the time window - Each of size (1, 10)
         aggregated_touch_data = extract_touch_features_for_window(relevant_touch_data)
 
-        # Stack this time-window column wise. with one row: (1, 38)
+        # Stack this time-window column wise. with one row: (1, 62)
         time_window_feature = pd.concat([aggregated_key_data, aggregated_acc_data, aggregated_gyr_data, aggregated_mag_data, aggregated_touch_data], axis=1, ignore_index=True)
         
         # Append the feature vector to current sequence
@@ -307,17 +340,23 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
 
         # Once number of windows gathered equals sequence length
         if count_of_current_windows == SEQUENCE_LENGTH:
-            # Concatenate the windows row wise (Time-Series) and append to sequences list (10, 38)
+            # Concatenate the windows row wise (Time-Series) and append to sequences list (10, 62)
             sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
             # Reset the values
             current_sequence = []
             count_of_current_windows = 0
 
         # Incrementing start time by 1
-        window_start_time += 1
+        window_start_time = window_end_time + 1
     
     # If there are large number of left overs in the sequence list, add them as a separate sequence
     if len(current_sequence) != 0 and len(current_sequence) > 5:
+        # Create a single-row DataFrame with zeros, matching the columns of existing frames
+        zero_df = pd.DataFrame([[0.0] * current_sequence[0].shape[1]], columns=current_sequence[0].columns)
+        padding = [zero_df.copy() for _ in range(SEQUENCE_LENGTH - len(current_sequence))]
+        current_sequence = current_sequence + padding
+
+        # Appending to sequences, Concatenate the windows row wise (Time-Series) and append to sequences list (10, 62)
         sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
 
     return sequences
@@ -325,21 +364,17 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
 
 def preprocess_user(user_id):
     user_dir_path = os.path.join(HMOG_DATASET_PATH, user_id)
-
     sessions = []
+
     # For each session of the user
     for session in os.listdir(user_dir_path):
         # If its a session
         if 'session' in session:
-            print("--")
-            print("Session", session)
             # Reading Keystroke Data
             key_csv = pd.read_csv(f"{user_dir_path}/{session}/KeyPressEvent.csv", header=None, usecols=[0, 3, 4], names=["event_time", "press_type", "key_code"])
             
             # Clean Keystroke Data
-            if not key_csv.empty:
-                clean_keystroke_data(key_csv)
-
+            key_csv = clean_keystroke_data(key_csv)
 
             # Reading Sensor Data
             acc_csv = pd.read_csv(f"{user_dir_path}/{session}/Accelerometer.csv", header=None, usecols=[0, 3, 4, 5], names=["event_time", "x", "y", "z"])   
@@ -358,29 +393,27 @@ def preprocess_user(user_id):
             # Appending to sessions list
             sessions.append(sequences)
 
-            print("Sequence Generated: ")
-            for sequence in sequences: 
-                print("Sequence")
-                print(sequence)
-            break
+            print("Completed Session", session)
+
+    return sessions
 
 
 def preprocess_data(user_ids):
-    start_time = time.time()
 
+    users_data = []
     # Preprocess each user sequentially
-    for user_id in user_ids[:1]:
-        preprocess_user(user_id)
+    # for user_id in user_ids:
+    #     users_data.append(preprocess_user(user_id))
 
     # Processing each user in the list parallelly utilizing all the CPU cores available
-    # with multiprocessing.Pool(CPU_COUNT) as p:
-    #     p.map(preprocess_user, user_ids)
+    with multiprocessing.Pool(CPU_COUNT) as p:
+        users_data = p.map(preprocess_user, user_ids)
 
-    end_time = time.time()
-
-    print(f"Time Taken: {end_time - start_time}s")
+    return users_data
 
 def main():
+    start_time = time.time()
+
     # List of all the user ids
     user_ids = os.listdir(os.path.join(HMOG_DATASET_PATH))
 
@@ -398,9 +431,25 @@ def main():
     assert len(set(user_ids_train) & set(user_ids_val) & set(user_ids_test)) == 0, "Train, Val and Test Users are not unique"
 
     # Preprocess Data For Each Split
-    preprocess_data(user_ids_train)
-    # preprocess_data(user_ids_val)
-    # preprocess_data(user_ids_test)
+    training_users_data = preprocess_data(user_ids_train)
+    with open(f"training_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile:
+        pickle.dump(training_users_data, outfile)
+    print("Training Users Done")
+
+    validation_users_data = preprocess_data(user_ids_val)
+    with open(f"validation_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile: 
+        pickle.dump(validation_users_data, outfile)
+    print("Validation Users Done")
+
+    test_users_data = preprocess_data(user_ids_test)
+    with open(f"test_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile:
+        pickle.dump(test_users_data, outfile)
+    print("Test Users Done")
+
+    end_time = time.time()
+    print(f"Time Taken: {end_time - start_time}s")
+
+
 
 
 if __name__ == "__main__": 
