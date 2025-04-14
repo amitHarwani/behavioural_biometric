@@ -1,2 +1,5 @@
 /datasets
 .vscode/
+test_users_*
+training_users_*
+validation_users_*
