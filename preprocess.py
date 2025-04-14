@@ -381,6 +381,7 @@ def preprocess_user(user_id):
     for session in os.listdir(user_dir_path):
         # If its a session
         if 'session' in session:
+            print("Starting Session", session)
             # Reading Keystroke Data
             key_csv = pd.read_csv(f"{user_dir_path}/{session}/KeyPressEvent.csv", header=None, usecols=[0, 3, 4], names=["event_time", "press_type", "key_code"])
             
@@ -465,7 +466,7 @@ def main():
 
 if __name__ == "__main__": 
     TRAIN_TEST_SPLIT_RANDOM_STATE = 42 # Random state for train test split
-    CPU_COUNT = multiprocessing.cpu_count() # Number of CPU Cores available
+    CPU_COUNT = multiprocessing.cpu_count() // 2 # Number of CPU Cores available
 
     main()
 
