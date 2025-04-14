@@ -19,6 +19,9 @@ Synchronize Data
         - Once sequence length is reached combine the feature vectors into one array
     - Output: List of users -> List of sessions -> List of sequences -> sequence length x feat. count
 
+NOTES: 
+    - Not Including Pressure In Touch as all values are 1. (Seen in Init. Analysis)
+
 """
 
 import os
@@ -36,7 +39,7 @@ HMOG_DATASET_PATH = './datasets/hmog/public_dataset'
 # Parameters
 TIME_WINDOW = 1 # Time window of 10 seconds
 SEQUENCE_LENGTH = 10 # Sequence length of 10
-MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW = 7
+MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW = 8
 
 
 # Combines press and release key events into one row.
@@ -263,7 +266,7 @@ def extract_touch_features_for_window(touch_csv: pd.DataFrame):
 
     # If the dataframe is empty return all the required cols with 0
     if len(touch_csv) == 0:
-        cols = ["x", "y", "pressure", "contact_size", "t_fft_x", "t_fft_y",  
+        cols = ["x", "y", "contact_size", "t_fft_x", "t_fft_y",  
                 "t_fd_x", "t_fd_y", "t_sd_x", "t_sd_y"]
         
         return pd.DataFrame([[0.0] * len(cols)], columns=cols )
@@ -326,7 +329,7 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         relevant_mag_data = mag_csv[(mag_csv["event_time"] >= window_start_time) & (mag_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
         relevant_touch_data = touch_csv[(touch_csv["event_time"] >= window_start_time) & (touch_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
         
-        # Returns (1, 16) - Keystroke features aggregated for the time window
+        # Returns (1, 17) - Keystroke features aggregated for the time window
         aggregated_key_data = extract_keystoke_features_for_window(relevant_key_data)
 
         # IMU features aggregated for the time window - Each of size (1, 12)
@@ -334,7 +337,7 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         aggregated_gyr_data = extract_imu_features_for_window(relevant_gyr_data, "g")
         aggregated_mag_data = extract_imu_features_for_window(relevant_mag_data, "m")
 
-        # Touch features aggregated for the time window - Each of size (1, 10)
+        # Touch features aggregated for the time window - Each of size (1, 9)
         aggregated_touch_data = extract_touch_features_for_window(relevant_touch_data)
 
         # Stack this time-window column wise. with one row: (1, 62)
@@ -390,7 +393,7 @@ def preprocess_user(user_id):
             mag_csv = pd.read_csv(f"{user_dir_path}/{session}/Magnetometer.csv", header=None, usecols=[0, 3, 4, 5], names=["event_time", "x", "y", "z"]) 
 
             # Reading Touch Data
-            touch_csv = pd.read_csv(f"{user_dir_path}/{session}/TouchEvent.csv", header=None, usecols=[0, 6, 7, 8, 9], names=["event_time", "x", "y", "pressure", "contact_size"])
+            touch_csv = pd.read_csv(f"{user_dir_path}/{session}/TouchEvent.csv", header=None, usecols=[0, 6, 7, 9], names=["event_time", "x", "y", "contact_size"])
 
             # Clean Touch Data
             clean_touch_data(touch_csv)
@@ -440,17 +443,17 @@ def main():
 
     # Preprocess Data For Each Split
     training_users_data = preprocess_data(user_ids_train)
-    with open(f"training_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile:
+    with open(f"training_users_data_tw{TIME_WINDOW}_sq{SEQUENCE_LENGTH}_maxk{MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW}.pickle",'wb') as outfile:
         pickle.dump(training_users_data, outfile)
     print("Training Users Done")
 
     validation_users_data = preprocess_data(user_ids_val)
-    with open(f"validation_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile: 
+    with open(f"validation_users_data_tw{TIME_WINDOW}_sq{SEQUENCE_LENGTH}_maxk{MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW}.pickle",'wb') as outfile: 
         pickle.dump(validation_users_data, outfile)
     print("Validation Users Done")
 
     test_users_data = preprocess_data(user_ids_test)
-    with open(f"test_users_data_tw1_sq10_maxk7.pickle",'wb') as outfile:
+    with open(f"test_users_data_tw{TIME_WINDOW}_sq{SEQUENCE_LENGTH}_maxk{MAX_KEYSTROKE_LENGTH_IN_TIME_WINDOW}.pickle",'wb') as outfile:
         pickle.dump(test_users_data, outfile)
     print("Test Users Done")
 
