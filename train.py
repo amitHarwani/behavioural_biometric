@@ -3,6 +3,8 @@ import sys
 import pickle
 import torch
 import numpy as np
+import math
+import inspect
 
 from model import ModelConfig, Model
 from data_loader import get_training_dataloader
@@ -88,11 +90,12 @@ if __name__ == "__main__":
         n_layers= 5, # Number of layers or transformer encoders
         d_output_emb= 64 # Output embedding dimension
     )
-    screen_dim_x=1903
-    screen_dim_y=1920
-    batch_size = 64
-    same_user_ratio_in_batch = 0.25
-    sequence_length = 10
+    screen_dim_x=1903 # Screen width (For touch data)
+    screen_dim_y=1920 # Screen height (For touch data)
+    batch_size = 64 # Batch size
+    same_user_ratio_in_batch = 0.25 # Ratio of same user pair sequences in the batch
+    sequence_length = 10 # Sequence length
+    n_epochs = 10 # Number of epochs
 
     # Preprocessed files
     train_dataset_file = "training_users_data_tw1_sq10_maxk8.pickle"
@@ -127,17 +130,65 @@ if __name__ == "__main__":
 
     # Model
     model = Model(model_config)
+    num_of_parameters = sum(p.numel() for p in model.parameters())
+
     # Moving the model to the device used for training
-    # model.to(device)
+    model.to(device)
+
 
     # print("Model")
-
     # for k, v in model.state_dict().items():
     #     print(k, v.shape)
 
+    # Data Loader
+    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
+                                         required_feature_dim=model_config.d_model, num_workers=1)
     
-    # dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
-    #                                      required_feature_dim=model_config.d_model, num_workers=1)
+    steps_per_epoch = len(dataloader) # Number of steps in an epoch OR number of batches
+    total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
+
+    max_lr = 6e-4 # 0.0006
+    min_lr = max_lr * 0.1 # 0.00006
+    warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
+
+    # Cosine decay with linear warmup learning rate schedule
+    def get_lr(iteration):
+        # Linear warmup
+        if iteration < warmup_steps:
+            return max_lr * (iteration + 1 / warmup_steps)
+        if iteration >= total_steps_to_train:
+            return min_lr
+        # Cosine decay
+        decay_ratio = (iteration - warmup_steps) / (total_steps_to_train - warmup_steps) # Between 0 and 1
+        assert 0<=decay_ratio<=1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff  starts at 1 and goes to 0
+        return min_lr + coeff * (max_lr - min_lr) 
+    
+    # Optimizer
+    # Create AdamW optimizer and use the fused version if it is available - when running on CUDA
+    # Instead of iterating over all the tensors and updating them which would launch many kernels, Fused would fuse all these kernels 
+    fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    use_fused = fused_available and 'cuda' in device
+    optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
+
+    for epoch in range(n_epochs):
+        for batch in dataloader:
+
+            sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
+            labels = batch['user_ids'] # User IDs
+
+            print(type(sequences), sequences.shape)
+            print(type(labels), labels.shape)
+            print(type(batch["attention_mask"]), batch["attention_mask"].shape )
+
+            break
+        break
+        
+
+            
+
+    
+
 
         
     
