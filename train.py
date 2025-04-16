@@ -1,24 +1,18 @@
 import numpy as np
 import sys
-import torch
-from torch.utils.data import Dataset, DataLoader, Sampler
-from numpy.typing import NDArray
 import pickle
-
-from model import ModelConfig
-
 import torch
-from torch.utils.data import Dataset, DataLoader, Sampler
-import random
 import numpy as np
-from collections import defaultdict
-from typing import List, Dict, Optional
 
+from model import ModelConfig, Model
+from data_loader import get_training_dataloader
 
 def normalize(data, screen_dim_x, screen_dim_y, split: str = "train"):
+    global means_for_normalization
+    global stds_for_normalization
 
     # If mean and std. are not computed yet and the split is not train
-    if (means_for_normalization == None or stds_for_normalization == None) and split != "train":
+    if (len(means_for_normalization) == 0 or len(stds_for_normalization) == 0) and split != "train":
         print("Pass Training Data First To Compute Mean and Std.")
         sys.exit(0)
         return
@@ -81,18 +75,24 @@ def normalize(data, screen_dim_x, screen_dim_y, split: str = "train"):
                 data[user_idx][sess_idx][seq_idx] = (sequence - means_for_normalization) / stds_for_normalization
 
 
-if __name__ == "main":
+
+if __name__ == "__main__":
     # Parameters
     model_config = ModelConfig(
         k = 6, # Number of gaussians in GRE
-        d_model= 62, # Num. of features
+        d_model= 64, # Num. of features
         seq_len= 10, # Block size/seq. length
-        n_temporal_heads= 5, # Num. of temporal heads
+        n_temporal_heads= 4, # Num. of temporal heads
         n_channel_heads= 5, # Num. of channel heads
         dropout= 0.1, # Dropout probability 
         n_layers= 5, # Number of layers or transformer encoders
         d_output_emb= 64 # Output embedding dimension
     )
+    screen_dim_x=1903
+    screen_dim_y=1920
+    batch_size = 64
+    same_user_ratio_in_batch = 0.25
+    sequence_length = 10
 
     # Preprocessed files
     train_dataset_file = "training_users_data_tw1_sq10_maxk8.pickle"
@@ -101,25 +101,43 @@ if __name__ == "main":
 
     # Loading the preprocessed objects
     with open(train_dataset_file, "rb") as infile:
-        train_dataset = pickle.loads(infile)
+        train_dataset = pickle.load(infile)
 
     with open(val_dataset_file, "rb") as infile:
-        val_dataset = pickle.loads(infile)
+        val_dataset = pickle.load(infile)
 
     with open(test_dataset_file, "rb") as infile:
-        test_dataset = pickle.loads(infile)
+        test_dataset = pickle.load(infile)
 
     # Means and std. deviations for normalization
-    means_for_normalization = None
-    stds_for_normalization = None
+    means_for_normalization = np.array([]) 
+    stds_for_normalization = np.array([]) 
 
     # Normalizing the datasets
-    normalize(train_dataset, screen_dim_x=1903, screen_dim_y=1920, split="train")
-    normalize(val_dataset, screen_dim_x=1903, screen_dim_y=1920, split="val")
-    normalize(test_dataset, screen_dim_x=1903, screen_dim_y=1920, split="test")
+    normalize(train_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="train")
+    normalize(val_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="val")
+    normalize(test_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="test")
+
+    # Identifying Device
+    device = "cpu"
+    if torch.cuda.is_available(): # GPU
+        device="cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): # Apple Silicon
+        device="mps"
+
+    # Model
+    model = Model(model_config)
+    # Moving the model to the device used for training
+    # model.to(device)
+
+    # print("Model")
+
+    # for k, v in model.state_dict().items():
+    #     print(k, v.shape)
 
     
-    
+    # dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
+    #                                      required_feature_dim=model_config.d_model, num_workers=1)
 
         
     

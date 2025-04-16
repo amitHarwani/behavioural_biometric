@@ -142,7 +142,7 @@ class ContrastiveSampler(Sampler):
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size # Equivalent to math.ceil(len(self.dataset)/ self.batch_size)
 
 
-def collate_fn(batch, max_sequence_len):
+def collate_fn(batch, max_sequence_len, required_feature_dim=64):
     """Collate function to handle variable-length sequences."""
     sequences = [item['sequence'] for item in batch] # All the sequences in the batch
     user_ids = [item['user_id'] for item in batch] # User Ids belonging to the sequences in the batch
@@ -152,8 +152,9 @@ def collate_fn(batch, max_sequence_len):
     max_len = max_sequence_len #lengths.max().item() # Max length among all
     
     # Get feature dimension
-    feature_dim = sequences[0].size(1) # Feature dimension
-    
+    feature_dim = required_feature_dim # Required Feature dimension
+    actual_feature_dim = sequences[0].size(1) 
+
     # Create padded tensor and mask
     padded = torch.zeros(len(sequences), max_len, feature_dim) # (batch_size, max_len of sequences, feature_dim)
     mask = torch.zeros(len(sequences), max_len, dtype=torch.bool) # (batch_size, max_len of sequences)
@@ -161,7 +162,7 @@ def collate_fn(batch, max_sequence_len):
     # Fill padded tensor
     for i, seq in enumerate(sequences): # Looping through the sequences in the batch
         end = lengths[i] # Current length of the sequence
-        padded[i, :end] = seq # At the batch item (i), till the current sequence length: fill the current seq
+        padded[i, :end, :actual_feature_dim] = seq # At the batch item (i), till the current sequence length: fill the current seq
         mask[i, :end] = True # At the batch item (i), the the current sequence length: fill true (1's) to indicate no mask.
     
     return {
@@ -172,12 +173,12 @@ def collate_fn(batch, max_sequence_len):
     }
 
 
-def get_training_dataloader(training_data, batch_size=32, same_user_ratio = 0.25, sequence_length=10, num_workers=4):
+def get_training_dataloader(training_data, batch_size=64, same_user_ratio = 0.25, sequence_length=10, required_feature_dim = 64, num_workers=4) -> DataLoader:
     dataset = TrainingDataset(training_data)
     sampler = ContrastiveSampler(dataset, batch_size, same_user_ratio)
     
     # Using partial to fix the max_sequence_length
-    collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length)
+    collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length, required_feature_dim = required_feature_dim)
 
     # Initializing and returning the data loader
     dataloader = DataLoader(

@@ -27,7 +27,7 @@ class PositionalEncoding(nn.Module):
 
         # Positions = seq_len x k, intializes a <seq_len> dim. tensor, unsqueeze makes it <seq_len> x 1, 
         # repeat 1 over the rows and k times over the cols makes it <seq_len> x <k>
-        self.positions = torch.tensor([i for i in range(config.seq_len)], requires_grad=False).unsqueeze(1).repeat(1, k)
+        self.positions = torch.tensor([i for i in range(config.seq_len)], requires_grad=False).unsqueeze(1).repeat(1, config.k)
         s = 0.0
         interval = config.seq_len / config.k
         mu = []
@@ -140,7 +140,7 @@ class Transformer(nn.Module):
     
 
 class Model(nn.Module):
-    def __init__(self, config: ModelConfig, keystroke_feature_count, imu_feature_count, keystroke_l, imu_l, trg_len):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         
         # Output of the below is = B x seq_len x d_model
@@ -149,10 +149,10 @@ class Model(nn.Module):
         # Flatten (B x seq_len x d_model) to (B x seq_len*d_model) and passed to linear layer
         # Output of below is (B x d_output_emb)
         self.linear_proj = nn.Sequential(
-            nn.Linear(config.seq_len * config.d_model, ((config.seq_len * config.d_model) / 2)),
+            nn.Linear(config.seq_len * config.d_model, ((config.seq_len * config.d_model) // 2)),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(((config.seq_len * config.d_model) / 2), config.d_output_emb),
+            nn.Linear(((config.seq_len * config.d_model) // 2), config.d_output_emb),
             nn.ReLU()
         )
         
