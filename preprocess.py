@@ -367,7 +367,7 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
     
     # Adding the remaining sequences
     if len(current_sequence) != 0:
-        sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
+        sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True).to_numpy())
 
     # If there are large number of left overs in the sequence list, add them as a separate sequence
     # if len(current_sequence) != 0 and len(current_sequence) > 5:
