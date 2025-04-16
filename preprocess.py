@@ -328,6 +328,11 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         relevant_gyr_data = gyr_csv[(gyr_csv["event_time"] >= window_start_time) & (gyr_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
         relevant_mag_data = mag_csv[(mag_csv["event_time"] >= window_start_time) & (mag_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
         relevant_touch_data = touch_csv[(touch_csv["event_time"] >= window_start_time) & (touch_csv["event_time"] <= window_end_time)].copy().reset_index(drop=True)
+
+        # If no data exists in this time period, increment window start time and continue
+        if relevant_key_data.empty and relevant_acc_data.empty and relevant_gyr_data.empty and relevant_mag_data.empty and relevant_touch_data.empty:
+            window_start_time = window_end_time + 1
+            continue
         
         # Returns (1, 17) - Keystroke features aggregated for the time window
         aggregated_key_data = extract_keystoke_features_for_window(relevant_key_data)
@@ -360,15 +365,19 @@ def synchronize_data(key_csv: pd.DataFrame, acc_csv: pd.DataFrame, gyr_csv: pd.D
         # Incrementing start time by 1
         window_start_time = window_end_time + 1
     
-    # If there are large number of left overs in the sequence list, add them as a separate sequence
-    if len(current_sequence) != 0 and len(current_sequence) > 5:
-        # Create a single-row DataFrame with zeros, matching the columns of existing frames
-        zero_df = pd.DataFrame([[0.0] * current_sequence[0].shape[1]], columns=current_sequence[0].columns)
-        padding = [zero_df.copy() for _ in range(SEQUENCE_LENGTH - len(current_sequence))]
-        current_sequence = current_sequence + padding
-
-        # Appending to sequences, Concatenate the windows row wise (Time-Series) and append to sequences list (10, 62)
+    # Adding the remaining sequences
+    if len(current_sequence) != 0:
         sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
+
+    # If there are large number of left overs in the sequence list, add them as a separate sequence
+    # if len(current_sequence) != 0 and len(current_sequence) > 5:
+    #     # Create a single-row DataFrame with zeros, matching the columns of existing frames
+    #     zero_df = pd.DataFrame([[0.0] * current_sequence[0].shape[1]], columns=current_sequence[0].columns)
+    #     padding = [zero_df.copy() for _ in range(SEQUENCE_LENGTH - len(current_sequence))]
+    #     current_sequence = current_sequence + padding
+
+    #     # Appending to sequences, Concatenate the windows row wise (Time-Series) and append to sequences list (10, 62)
+    #     sequences.append(pd.concat(current_sequence, axis=0, ignore_index=True))
 
     return sequences
 
