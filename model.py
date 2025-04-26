@@ -89,12 +89,13 @@ class TransformerEncoderLayer(nn.Module):
         
         self.ln_2 = nn.LayerNorm(config.d_model)
 
-    def forward(self, src, src_mask=None):
+    def forward(self, src, temporal_attn_mask, channel_attn_mask):
         # Temporal and channel attention's concatenated + src for residual connection, Layer Norm applied before attention
         # B x seq_len x d_model - src
         # After attention and attention norm - B x seq_len x d_model
         src_normalized = self.ln_1(src)
-        src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized)[0] + self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2))[0].transpose(-1, -2)
+        src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized, key_padding_mask=temporal_attn_mask)[0] 
+        + self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), key_padding_mask = channel_attn_mask)[0].transpose(-1, -2)
         
         # CNN + src for residual connection, Layer Norm Applied befor cnn
         # B x 1 x seq_len x d_model -> unsqueeze
@@ -115,9 +116,9 @@ class TransformerEncoder(nn.Module):
 
         self.ln_f = nn.LayerNorm(config.d_model)
 
-    def forward(self, src):
+    def forward(self, src, temporal_attn_mask, channel_attn_mask):
         for layer in self.layers:
-            src = layer(src)
+            src = layer(src, temporal_attn_mask, channel_attn_mask)
 
         # Final Layer Norm
         src = self.ln_f(src)
@@ -133,10 +134,10 @@ class Transformer(nn.Module):
 
         self.encoder = TransformerEncoder(config) # B, seq_len, d_model
 
-    def forward(self, inputs):
+    def forward(self, inputs, temporal_attn_mask, channel_attn_mask):
         encoded_inputs = self.pos_encoding(inputs)
 
-        return self.encoder(encoded_inputs)
+        return self.encoder(encoded_inputs, temporal_attn_mask, channel_attn_mask)
     
 
 class Model(nn.Module):
@@ -157,10 +158,10 @@ class Model(nn.Module):
         )
         
         
-    def forward(self, inputs):
+    def forward(self, inputs, temporal_attn_mask, channel_attn_mask):
         # Input: B x seq_len x d_model
 
         # Flatten to convert from B x seq_len x d_model to B*seq_len x d_model
-        out = self.linear_proj(torch.flatten(self.transformer(inputs), start_dim=1, end_dim=2))
+        out = self.linear_proj(torch.flatten(self.transformer(inputs, temporal_attn_mask, channel_attn_mask), start_dim=1, end_dim=2))
         
         return out # B x d_output_emb

@@ -171,15 +171,14 @@ if __name__ == "__main__":
     use_fused = fused_available and 'cuda' in device
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
+    print("Before Loop")
     for epoch in range(n_epochs):
         for batch in dataloader:
 
             sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
-            labels = batch['user_ids'] # User IDs
-
-            print(type(sequences), sequences.shape)
-            print(type(labels), labels.shape)
-            print(type(batch["attention_mask"]), batch["attention_mask"].shape )
+            labels = batch['user_ids'] # User IDs (batch_size (B))
+            temporal_attention_mask = batch['temporal_attention_mask']
+            channel_attention_mask = batch['channel_attention_mask']
 
             break
         break

@@ -155,20 +155,25 @@ def collate_fn(batch, max_sequence_len, required_feature_dim=64):
     feature_dim = required_feature_dim # Required Feature dimension
     actual_feature_dim = sequences[0].size(1) 
 
+    # Channel mask for channel head attention, Initializing with all trues i.e. Ignore all
+    channel_mask = torch.ones(len(sequences), feature_dim, dtype=torch.bool); # (batch_size, feature_dim)
+    channel_mask[:, :actual_feature_dim] = False # Setting all the actual features to False (Don't Ignore them)
+
     # Create padded tensor and mask
     padded = torch.zeros(len(sequences), max_len, feature_dim) # (batch_size, max_len of sequences, feature_dim)
-    mask = torch.zeros(len(sequences), max_len, dtype=torch.bool) # (batch_size, max_len of sequences)
+    temporal_mask = torch.ones(len(sequences), max_len, dtype=torch.bool) # (batch_size, max_len of sequences)
     
     # Fill padded tensor
     for i, seq in enumerate(sequences): # Looping through the sequences in the batch
         end = lengths[i] # Current length of the sequence
         padded[i, :end, :actual_feature_dim] = seq # At the batch item (i), till the current sequence length: fill the current seq
-        mask[i, :end] = True # At the batch item (i), the the current sequence length: fill true (1's) to indicate no mask.
+        temporal_mask[i, :end] = False # At the batch item (i), the the current sequence length: fill false (0's) to indicate no mask.
     
     return {
-        'sequences': padded, # (batch_size, max_len of sequences, feature_dim)
+        'sequences': torch.tensor(padded), # (batch_size, max_len of sequences, feature_dim)
         'user_ids': torch.tensor(user_ids), # user_ids
-        'attention_mask': mask, # Mask
+        'temporal_attention_mask': temporal_mask, # Temporal Attention Mask,
+        'channel_attention_mask': channel_mask,
         'lengths': lengths # Actual lengths if needed
     }
 
