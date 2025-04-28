@@ -5,6 +5,7 @@ import torch
 import numpy as np
 import math
 import inspect
+import matplotlib.pyplot as plt
 
 from model import ModelConfig, Model
 from data_loader import get_training_dataloader
@@ -88,7 +89,9 @@ if __name__ == "__main__":
         n_channel_heads= 5, # Num. of channel heads
         dropout= 0.1, # Dropout probability 
         n_layers= 5, # Number of layers or transformer encoders
-        d_output_emb= 64 # Output embedding dimension
+        d_output_emb= 64, # Output embedding dimension
+        n_users = 69, # Number of users (For classification)
+        contrastive_loss_alpha = 2 # Contrastive loss importance hyperparameter (Alpha)
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
@@ -127,6 +130,14 @@ if __name__ == "__main__":
         device="cuda"
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available(): # Apple Silicon
         device="mps"
+    print("Device: ", device)
+
+    # Data Loader
+    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
+                                         required_feature_dim=model_config.d_model, num_workers=1)
+    
+    # Enabling Tensor Flow 32 (TF32) to make calculations faster 
+    torch.set_float32_matmul_precision('high')
 
     # Model
     model = Model(model_config)
@@ -135,15 +146,11 @@ if __name__ == "__main__":
     # Moving the model to the device used for training
     model.to(device)
 
-
     # print("Model")
     # for k, v in model.state_dict().items():
     #     print(k, v.shape)
 
-    # Data Loader
-    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
-                                         required_feature_dim=model_config.d_model, num_workers=1)
-    
+
     steps_per_epoch = len(dataloader) # Number of steps in an epoch OR number of batches
     total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
 
@@ -171,17 +178,74 @@ if __name__ == "__main__":
     use_fused = fused_available and 'cuda' in device
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
-    print("Before Loop")
+    # Tell PyTorch to print the full tensor
+    torch.set_printoptions(threshold=torch.inf)
+
+    print("Total Steps", total_steps_to_train)
+    step_count = 0
     for epoch in range(n_epochs):
         for batch in dataloader:
+            print("--Step--", step_count)
+
+            optimizer.zero_grad() # Zeroing the gradients
 
             sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
             labels = batch['user_ids'] # User IDs (batch_size (B))
-            temporal_attention_mask = batch['temporal_attention_mask']
-            channel_attention_mask = batch['channel_attention_mask']
+            temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
+            channel_attention_mask = batch['channel_attention_mask'] # (B, C)
 
-            break
-        break
+            # Moving the tensors to device
+            sequences = sequences.to(device)
+            labels = labels.to(device)
+            temporal_attention_mask = temporal_attention_mask.to(device)
+            channel_attention_mask = channel_attention_mask.to(device)
+
+             # Using BF16
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                # Forward Pass
+                emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
+
+            # Backprop
+            loss.backward()
+
+            raw_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2.0)
+            print(f"Raw Gradient Norm: {raw_norm}")
+
+            # Clipping the global norm of the gradient
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+
+            # Updating the weights
+            # determine and set the learning rate for this iteration
+            lr = get_lr(step_count)
+            for param_group in optimizer.param_groups: # Setting the learning rate in the optimizer
+                param_group['lr'] = lr
+            optimizer.step() # Updating the weights
+
+            torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
+
+            print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
+
+            # print("Logits")
+            # print(logits)
+            # plt.figure(figsize=(20, 4))
+            # legends = []
+            # for name, param in model.named_parameters():
+            #         if param.grad is not None and param.grad.numel() >= 2:
+            #             grad = param.grad.cpu()
+            #             grad_norm = torch.norm(grad).item()
+            #             grad_mean = grad.mean().item()
+            #             grad_var = grad.std().item()
+            #             print(f"{name} | Grad Norm: {grad_norm:.4f} | Grad Mean: {grad_mean:.6f} | Grad var: {grad_var:.6f}")
+            #             hy, hx = torch.histogram(grad, density=True)
+            #             plt.plot(hx[:-1].detach(), hy.detach())
+            #             legends.append(f'layer {name}')
+
+            # plt.legend(legends)
+            # plt.title('gradient distribution')
+            # plt.show()
+
+            step_count += 1
         
 
             

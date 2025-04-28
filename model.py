@@ -14,6 +14,8 @@ class ModelConfig:
     dropout: float = 0.1
     n_layers: int = 5 # Number of Layers
     d_output_emb: int = 64 # Dimension of output embedding
+    n_users: int = 69 # Number of users to classify
+    contrastive_loss_alpha: int = 2 # Contrastive loss importance - hyperparameter (Alpha)
 
 
 
@@ -27,19 +29,29 @@ class PositionalEncoding(nn.Module):
 
         # Positions = seq_len x k, intializes a <seq_len> dim. tensor, unsqueeze makes it <seq_len> x 1, 
         # repeat 1 over the rows and k times over the cols makes it <seq_len> x <k>
-        self.positions = torch.tensor([i for i in range(config.seq_len)], requires_grad=False).unsqueeze(1).repeat(1, config.k)
+        self.register_buffer('positions', 
+                             torch.arange(config.seq_len).unsqueeze(1).repeat(1, config.k)
+                             )
+        # self.positions = torch.tensor([i for i in range(config.seq_len)], requires_grad=False).unsqueeze(1).repeat(1, config.k)
+
         s = 0.0
         interval = config.seq_len / config.k
-        mu = []
-        # Mu List Incremented by Interval
-        for _ in range(config.k):
-            mu.append(nn.Parameter(torch.tensor(s, dtype=torch.float), requires_grad=True))
-            s = s + interval
+        # Mu  Incremented by Interval
+        mu = torch.arange(0, config.k, dtype=torch.float).unsqueeze(0) * interval  # (1,k)
+        self.mu = nn.Parameter(mu, requires_grad=True)
+
+        # mu = []
+        # # Mu List Incremented by Interval
+        # for _ in range(config.k):
+        #     mu.append(nn.Parameter(torch.tensor(s, dtype=torch.float), requires_grad=True))
+        #     s = s + interval
         
-        # Mu: 1 x k
-        self.mu = nn.Parameter(torch.tensor(mu, dtype=torch.float).unsqueeze(0), requires_grad=True)
+        # # Mu: 1 x k
+        # self.mu = nn.Parameter(torch.tensor(mu, dtype=torch.float).unsqueeze(0), requires_grad=True)
         # 1 x k
-        self.sigma = nn.Parameter(torch.ones(config.k).unsqueeze(0))
+        
+        self.sigma = nn.Parameter(torch.full((1, config.k), float(1.0), dtype=torch.float), requires_grad=True)
+        # self.sigma = nn.Parameter(torch.ones(config.k).unsqueeze(0))
         
     def normal_pdf(self, pos, mu, sigma):
         a = pos - mu # seq_len x k
@@ -144,6 +156,8 @@ class Model(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         
+        self.config = config
+
         # Output of the below is = B x seq_len x d_model
         self.transformer = Transformer(config)
         
@@ -152,16 +166,46 @@ class Model(nn.Module):
         self.linear_proj = nn.Sequential(
             nn.Linear(config.seq_len * config.d_model, ((config.seq_len * config.d_model) // 2)),
             nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.Dropout(config.dropout),
             nn.Linear(((config.seq_len * config.d_model) // 2), config.d_output_emb),
             nn.ReLU()
         )
+
+        self.classifier = nn.Linear(config.d_output_emb, config.n_users, bias=False) # Final Classification layer
         
         
-    def forward(self, inputs, temporal_attn_mask, channel_attn_mask):
+    def forward(self, inputs, temporal_attn_mask, channel_attn_mask, targets=None):
         # Input: B x seq_len x d_model
 
         # Flatten to convert from B x seq_len x d_model to B*seq_len x d_model
         out = self.linear_proj(torch.flatten(self.transformer(inputs, temporal_attn_mask, channel_attn_mask), start_dim=1, end_dim=2))
         
-        return out # B x d_output_emb
+        # B x n_users
+        logits = self.classifier(out)
+        
+        # Loss initialized as None
+        loss = None
+
+        if targets is not None:
+            # (B,B) representing pairwise distances of the output embeddings
+            dist = ((out.unsqueeze(1) - out.unsqueeze(0)) ** 2).mean(-1) 
+            # (B,B) where 1 represents examples belonging to the same user, and 0 represents examples belonging to different users
+            pos_mask = (targets.unsqueeze(1) == targets.unsqueeze(0)).float()
+            # Removing the diagnol i.e. self pairing from the positive mask
+            pos_mask = pos_mask - torch.diag(torch.diag(pos_mask))
+            # (B,B) where 1 represents examples belonging to different users.
+            neg_mask = (targets.unsqueeze(1) != targets.unsqueeze(0)).float()
+            # Maximum distance of instances belonging to same labels - Acts as the margin
+            max_dist = (dist * pos_mask).max()
+            # Contrastive Loss
+            cos_loss = (dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3) + (F.relu(max_dist - dist) * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)
+            cos_loss = cos_loss.mean()
+
+            # Cross entropy loss
+            cross_entropy_loss = F.cross_entropy(logits, targets)
+
+            # Total Loss
+            loss = cross_entropy_loss + (self.config.contrastive_loss_alpha * cos_loss)
+        
+        # Return embeddings, logits and loss
+        return out, logits, loss 

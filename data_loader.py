@@ -170,7 +170,7 @@ def collate_fn(batch, max_sequence_len, required_feature_dim=64):
         temporal_mask[i, :end] = False # At the batch item (i), the the current sequence length: fill false (0's) to indicate no mask.
     
     return {
-        'sequences': torch.tensor(padded), # (batch_size, max_len of sequences, feature_dim)
+        'sequences': padded, # (batch_size, max_len of sequences, feature_dim)
         'user_ids': torch.tensor(user_ids), # user_ids
         'temporal_attention_mask': temporal_mask, # Temporal Attention Mask,
         'channel_attention_mask': channel_mask,
