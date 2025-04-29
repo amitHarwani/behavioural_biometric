@@ -10,6 +10,11 @@ import matplotlib.pyplot as plt
 from model import ModelConfig, Model
 from data_loader import get_training_dataloader
 
+# import sys
+
+# Open file for writing
+# sys.stdout = open('output.txt', 'w')
+
 def normalize(data, screen_dim_x, screen_dim_y, split: str = "train"):
     global means_for_normalization
     global stds_for_normalization
@@ -28,7 +33,7 @@ def normalize(data, screen_dim_x, screen_dim_y, split: str = "train"):
             for session in user:
                 for sequence in session:
                     # Append sequence to all data
-                    all_data.append(sequence) # Sequence is mostly (10, 62)
+                    all_data.append(sequence) # Sequence is mostly (seq_length, 62)
 
         # Combining to a single Nd array
         combined_array = np.concatenate(all_data, axis=0) # Shape (num_samples, 62)
@@ -77,7 +82,25 @@ def normalize(data, screen_dim_x, screen_dim_y, split: str = "train"):
                 
                 data[user_idx][sess_idx][seq_idx] = (sequence - means_for_normalization) / stds_for_normalization
 
-
+def merge_sequences(data, merge_length):
+    merged_data = []
+    for user in data:
+        user_data = []
+        for session in user:
+            session_data = []
+            # Flatten the session into a single array of shape (N*10, 62)
+            flat_session = np.concatenate(session, axis=0)
+            print("Flat Session shape", flat_session.shape)
+            # Split into chunks of merge_length
+            for i in range(0, len(flat_session), merge_length):
+                if i + merge_length <= len(flat_session):
+                    print("Adding from ",i, "to", i+merge_length)
+                    session_data.append(flat_session[i:i + merge_length])
+            if i < len(flat_session):
+                session_data.append(flat_session[i:])
+            user_data.append(session_data)
+        merged_data.append(user_data)
+    return merged_data
 
 if __name__ == "__main__":
     # Parameters
@@ -87,7 +110,7 @@ if __name__ == "__main__":
         seq_len= 10, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
         n_channel_heads= 5, # Num. of channel heads
-        dropout= 0.1, # Dropout probability 
+        dropout= 0.2, # Dropout probability 
         n_layers= 5, # Number of layers or transformer encoders
         d_output_emb= 64, # Output embedding dimension
         n_users = 69, # Number of users (For classification)
@@ -97,7 +120,6 @@ if __name__ == "__main__":
     screen_dim_y=1920 # Screen height (For touch data)
     batch_size = 64 # Batch size
     same_user_ratio_in_batch = 0.25 # Ratio of same user pair sequences in the batch
-    sequence_length = 10 # Sequence length
     n_epochs = 10 # Number of epochs
 
     # Preprocessed files
@@ -114,6 +136,8 @@ if __name__ == "__main__":
 
     with open(test_dataset_file, "rb") as infile:
         test_dataset = pickle.load(infile)
+
+    # train_dataset = merge_sequences(train_dataset, 30)
 
     # Means and std. deviations for normalization
     means_for_normalization = np.array([]) 
@@ -133,7 +157,7 @@ if __name__ == "__main__":
     print("Device: ", device)
 
     # Data Loader
-    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=sequence_length, 
+    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=model_config.seq_len, 
                                          required_feature_dim=model_config.d_model, num_workers=1)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
@@ -150,11 +174,10 @@ if __name__ == "__main__":
     # for k, v in model.state_dict().items():
     #     print(k, v.shape)
 
-
     steps_per_epoch = len(dataloader) # Number of steps in an epoch OR number of batches
     total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
-
-    max_lr = 6e-4 # 0.0006
+    print("steps_per_epoch", steps_per_epoch, "total_steps_to_train", total_steps_to_train)
+    max_lr = 6e-4 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
     warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
 
@@ -162,7 +185,7 @@ if __name__ == "__main__":
     def get_lr(iteration):
         # Linear warmup
         if iteration < warmup_steps:
-            return max_lr * (iteration + 1 / warmup_steps)
+            return max_lr * ((iteration + 1) / warmup_steps)
         if iteration >= total_steps_to_train:
             return min_lr
         # Cosine decay
@@ -180,8 +203,8 @@ if __name__ == "__main__":
 
     # Tell PyTorch to print the full tensor
     torch.set_printoptions(threshold=torch.inf)
+    torch.autograd.set_detect_anomaly(True)
 
-    print("Total Steps", total_steps_to_train)
     step_count = 0
     for epoch in range(n_epochs):
         for batch in dataloader:
@@ -190,9 +213,18 @@ if __name__ == "__main__":
             optimizer.zero_grad() # Zeroing the gradients
 
             sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
+
+            print("Batch Stats -------")
+            print(f"Mean: {sequences.mean()} | Std: {sequences.std()}")
             labels = batch['user_ids'] # User IDs (batch_size (B))
             temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
             channel_attention_mask = batch['channel_attention_mask'] # (B, C)
+
+            # print("Temportal Mask -----------------")
+            # print(temporal_attention_mask)
+            # print("Channel Mask ------------------")
+            # print(channel_attention_mask)
+            # print("----------------------------------")
 
             # Moving the tensors to device
             sequences = sequences.to(device)
@@ -201,15 +233,15 @@ if __name__ == "__main__":
             channel_attention_mask = channel_attention_mask.to(device)
 
              # Using BF16
-            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            # with torch.autocast(device_type=device, dtype=torch.bfloat16):
                 # Forward Pass
-                emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
+            emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
 
             # Backprop
             loss.backward()
 
-            raw_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2.0)
-            print(f"Raw Gradient Norm: {raw_norm}")
+            # raw_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2.0)
+            # print(f"Raw Gradient Norm: {raw_norm}")
 
             # Clipping the global norm of the gradient
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -223,9 +255,13 @@ if __name__ == "__main__":
             optimizer.step() # Updating the weights
 
             torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
-
-            print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
-
+            # print("Parameters")
+            # for name, param in model.named_parameters():
+            #     print(f"Parameter name: {name}, Shape: {param.shape}")
+            #     print(param)
+            #     print("===================================")
+            # print("Embeddings")
+            # print(emb)
             # print("Logits")
             # print(logits)
             # plt.figure(figsize=(20, 4))
@@ -237,13 +273,15 @@ if __name__ == "__main__":
             #             grad_mean = grad.mean().item()
             #             grad_var = grad.std().item()
             #             print(f"{name} | Grad Norm: {grad_norm:.4f} | Grad Mean: {grad_mean:.6f} | Grad var: {grad_var:.6f}")
-            #             hy, hx = torch.histogram(grad, density=True)
-            #             plt.plot(hx[:-1].detach(), hy.detach())
-            #             legends.append(f'layer {name}')
+                        # hy, hx = torch.histogram(grad, density=True)
+                        # plt.plot(hx[:-1].detach(), hy.detach())
+                        # legends.append(f'layer {name}')
 
             # plt.legend(legends)
             # plt.title('gradient distribution')
             # plt.show()
+            print("--")
+            print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
 
             step_count += 1
         

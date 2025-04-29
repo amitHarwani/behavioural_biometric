@@ -86,19 +86,23 @@ class TransformerEncoderLayer(nn.Module):
         """
         self.cnn = nn.Sequential(
             nn.Conv2d(1, self.cnn_units, (1, 1)),
-            nn.BatchNorm2d(self.cnn_units),
+            nn.LayerNorm([self.cnn_units, config.seq_len, config.d_model]),
+            # nn.BatchNorm2d(self.cnn_units),
             nn.Dropout(config.dropout),
             nn.ReLU(),
             nn.Conv2d(self.cnn_units, self.cnn_units, (3, 3), padding=1),
-            nn.BatchNorm2d(self.cnn_units),
+            nn.LayerNorm([self.cnn_units, config.seq_len, config.d_model]),
+            # nn.BatchNorm2d(self.cnn_units),
             nn.Dropout(config.dropout),
             nn.ReLU(),
             nn.Conv2d(self.cnn_units, 1, (5, 5), padding=2),
-            nn.BatchNorm2d(1),
+            nn.LayerNorm([self.cnn_units, config.seq_len, config.d_model]),
+            # nn.BatchNorm2d(1),
             nn.Dropout(config.dropout),
             nn.ReLU()
         )
-        
+        self.c_proj = nn.Linear(config.d_model, config.d_model)
+        self.c_proj.SCALE_RES_INIT=1
         self.ln_2 = nn.LayerNorm(config.d_model)
 
     def forward(self, src, temporal_attn_mask, channel_attn_mask):
@@ -109,14 +113,15 @@ class TransformerEncoderLayer(nn.Module):
         src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized, key_padding_mask=temporal_attn_mask)[0] 
         + self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), key_padding_mask = channel_attn_mask)[0].transpose(-1, -2)
         
+        # print(f"After Attention mean: {src.mean()} | std: {src.std()}")
         # CNN + src for residual connection, Layer Norm Applied befor cnn
         # B x 1 x seq_len x d_model -> unsqueeze
         # 1 x 1 Kernel = B x 1 x seq_len x d_model
         # 3 x 3 Kernel = B x 1 x seq_len x d_model
         # 5 x 5 Kernel = B x 1 x seq_len x d_model
 
-        src = src + self.cnn(self.ln_2(src).unsqueeze(dim=1)).squeeze(dim=1)
-            
+        src = src + self.c_proj(self.cnn(self.ln_2(src).unsqueeze(dim=1)).squeeze(dim=1))
+        # print(f"After CNN mean: {src.mean()} | std: {src.std()}")
         return src
 
 # Encoder (Represents all the encoder layers combined)
@@ -131,9 +136,12 @@ class TransformerEncoder(nn.Module):
     def forward(self, src, temporal_attn_mask, channel_attn_mask):
         for layer in self.layers:
             src = layer(src, temporal_attn_mask, channel_attn_mask)
+            # print(f"After Transformer Block: {src.mean()} | std: {src.std()}")
 
         # Final Layer Norm
         src = self.ln_f(src)
+        
+        # print(f"After Encoder mean: {src.mean()} | std: {src.std()}")
 
         return src
 
@@ -144,10 +152,20 @@ class Transformer(nn.Module):
 
         self.pos_encoding = PositionalEncoding(config) # B, seq_len, d_model
 
+        # Normal pos. emb
+        # self.pos_encoding = nn.Embedding(config.seq_len, config.d_model)
+
         self.encoder = TransformerEncoder(config) # B, seq_len, d_model
 
     def forward(self, inputs, temporal_attn_mask, channel_attn_mask):
+
         encoded_inputs = self.pos_encoding(inputs)
+        # print(f"After Positional Encoding mean: {encoded_inputs.mean()} | std: {encoded_inputs.std()}")
+
+        # Normal pos. emb
+        # pos = torch.arange(0, inputs.size(1), dtype=torch.long, device=inputs.device) # shape (seq_len)
+        # pos_emb = self.pos_encoding(pos) # shape (seq_len, n_embd)
+        # encoded_inputs = inputs + pos_emb
 
         return self.encoder(encoded_inputs, temporal_attn_mask, channel_attn_mask)
     
@@ -172,16 +190,32 @@ class Model(nn.Module):
         )
 
         self.classifier = nn.Linear(config.d_output_emb, config.n_users, bias=False) # Final Classification layer
-        
-        
+        # self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.MultiheadAttention):
+            std = self.config.n_layers**-0.5
+
+            torch.nn.init.normal_(module.out_proj.weight, mean=0, std=std )
+            torch.nn.init.zeros_(module.out_proj.bias)
+
+        if hasattr(module, 'SCALE_RES_INIT'):
+            std = self.config.n_layers**-0.5
+            torch.nn.init.normal_(module.weight, mean=0, std=std )
+            torch.nn.init.zeros_(module.bias)
+    
     def forward(self, inputs, temporal_attn_mask, channel_attn_mask, targets=None):
         # Input: B x seq_len x d_model
 
         # Flatten to convert from B x seq_len x d_model to B*seq_len x d_model
         out = self.linear_proj(torch.flatten(self.transformer(inputs, temporal_attn_mask, channel_attn_mask), start_dim=1, end_dim=2))
         
+        # print(f"After Linear Projection mean: {out.mean()} | std: {out.std()}")
+
         # B x n_users
         logits = self.classifier(out)
+
+        # print(f"After Logits mean: {logits.mean()} | std: {logits.std()}")
         
         # Loss initialized as None
         loss = None
