@@ -8,6 +8,7 @@ import inspect
 import matplotlib.pyplot as plt
 
 from model import ModelConfig, Model
+from validate import validate
 from data_loader import get_training_dataloader
 
 # import sys
@@ -284,8 +285,14 @@ if __name__ == "__main__":
             print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
 
             step_count += 1
-        
 
+        # After every epoch - Validate
+        classification_accuracy, key_wise_stats, best_eer = validate(model=model, dataset=val_dataset, num_of_enrollment_sessions=3, device=device)
+
+        print(f"Best EER: {best_eer}, Classification Accuracy: {classification_accuracy}")
+        for key, value in key_wise_stats.items():
+            print(f"Key: {key}, frr': {value['frr_at_threshold']}, far: {value['far_at_threshold']}, eer: {value['eer']}, 'threshold': {value['threshold']},  auc: {value['auc']}")
+            
             
 
     
