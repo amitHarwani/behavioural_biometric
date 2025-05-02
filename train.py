@@ -2,14 +2,16 @@ import numpy as np
 import sys
 import pickle
 import torch
+import torch.nn.functional as F
 import numpy as np
 import math
 import inspect
 import matplotlib.pyplot as plt
+import random
+from collections import defaultdict
 
 from model import ModelConfig, Model
-from validate import validate
-from data_loader import get_training_dataloader
+from data_loader import get_training_dataloader, get_testing_dataloader
 
 # import sys
 
@@ -103,6 +105,177 @@ def merge_sequences(data, merge_length):
         merged_data.append(user_data)
     return merged_data
 
+
+def merge_sequences_overlap(training_data, merge_length, overlap_length):
+    merged_data = []
+    step_size = merge_length - overlap_length  # How much we move each time
+    for user in training_data:
+        user_data = []
+        for session in user:
+            session_data = []
+            flat_session = np.concatenate(session, axis=0)
+            i = 0
+            while i + merge_length <= len(flat_session):
+                session_data.append(flat_session[i:i + merge_length])
+                i += step_size  # Move by step_size instead of merge_length
+            if i < len(flat_session):
+                session_data.append(flat_session[i:])
+            user_data.append(session_data)
+        merged_data.append(user_data)
+    return merged_data
+
+
+# Splitting validation data
+def split_training_data_by_sessions(data, validation_ratio=0.2):
+    random.seed(42) # For reproducibility
+    train_data = []
+    val_data = []
+
+    for user in data:
+        # Shuffle the sessions for randomness
+        random.shuffle(user)
+        num_val_sessions = int(len(user) * validation_ratio)
+
+        # Split sessions into training and validation
+        val_data.append(user[:num_val_sessions])
+        train_data.append(user[num_val_sessions:])
+
+    return train_data, val_data
+
+def intra_inter_maha_streaming(X, y, cov_inv, chunk_size=512):
+    # X: (N,D), y: (N,), cov_inv: (D,D)
+    N = X.shape[0]
+    # center X once:
+    mu = X.mean(0, keepdim=True)
+    Xc = X - mu
+
+    # 1) diag terms δ_i
+    #    δ_i = x_i^T Σ⁻¹ x_i
+    #    shape: (N,)
+    δ = (Xc @ cov_inv * Xc).sum(dim=1)
+
+    # prepare masks and accumulators
+    lbl_eq = y.unsqueeze(1) == y.unsqueeze(0)
+    # we will accumulate sum of d^2 over same‐class and diff‐class
+    same_sum = 0.0
+    same_count = 0
+    diff_sum = 0.0
+    diff_count = 0
+
+    # 2) process in chunks of rows
+    for start in range(0, N, chunk_size):
+        end = min(start + chunk_size, N)
+        Xi = Xc[start:end]               # (K, D)
+        δi = δ[start:end].unsqueeze(1)   # (K, 1)
+
+        # compute block M_block = Xi Σ⁻¹ Xcᵀ → shape (K, N)
+        M_block = Xi @ cov_inv @ Xc.t()  # (K, N)
+
+        # compute squared-distance block: δ_i + δ_j - 2 M_ij
+        # broadcast δ_i over columns, δ over rows
+        d2_block = δi + δ.unsqueeze(0) - 2.0 * M_block
+
+        # now mask and accumulate
+        mask_block = lbl_eq[start:end]   # (K, N)
+        same_sum  += d2_block[mask_block].sum().item()
+        same_count+= mask_block.sum().item()
+
+        diff_mask = ~mask_block
+        diff_sum  += d2_block[diff_mask].sum().item()
+        diff_count+= diff_mask.sum().item()
+
+        # drop the block → memory freed before next iteration
+
+    # convert mean squared distances → mean distances
+    intra_maha = float((same_sum  / same_count)**0.5)
+    inter_maha = float((diff_sum  / diff_count)**0.5)
+
+    return intra_maha, inter_maha
+
+@torch.no_grad()
+def validate(val_dataloader):
+    # Putting the model in eval mode
+    model.eval()
+    losses = torch.zeros(len(val_dataloader))
+
+    all_embs = []  # emb: (N: number of samples, D)
+    all_labels = []  # (N,)
+    for idx, batch in enumerate(val_dataloader):
+        sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
+        labels = batch['user_ids'] # User IDs (batch_size (B))
+        temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
+        channel_attention_mask = batch['channel_attention_mask'] # (B, C)
+
+        # Moving the tensors to device
+        sequences = sequences.to(device)
+        labels = labels.to(device)
+        temporal_attention_mask = temporal_attention_mask.to(device)
+        channel_attention_mask = channel_attention_mask.to(device)
+
+        emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
+        losses[idx] = loss
+
+        all_embs.append(emb)      
+        all_labels.append(labels)
+
+    model.train() # Putting the model back in training mode
+
+    X = torch.cat(all_embs, dim=0)   # (N, D)
+    y = torch.cat(all_labels, dim=0) # (N,)
+
+    N, D = X.shape
+
+    # 1) Cosine‐similarity matrix
+    X_norm = F.normalize(X)      # (N, D)
+    cosim = X_norm @ X_norm.t()              # (N, N)
+
+    # create masks
+    lbl_eq = y.unsqueeze(1) == y.unsqueeze(0)  # (N, N)
+    same_mask = lbl_eq.fill_diagonal_(False)   # exclude self‐pairs
+    diff_mask = ~lbl_eq
+
+    intra_cos = cosim[same_mask].mean()
+    inter_cos = cosim[diff_mask].mean()
+
+     # 2) Mahalanobis distances
+    # compute covariance of X
+    mean = X.mean(dim=0, keepdim=True)        # (1, D)
+    Xc = X - mean                             # (N, D)
+    # unbiased covariance matrix
+    cov = (Xc.t() @ Xc) / (N - 1)             # (D, D)
+    # regularize & invert
+    eps = 1e-5
+    cov_inv = torch.linalg.inv(cov + eps * torch.eye(D, device=X.device))
+
+    intra_maha, inter_maha = intra_inter_maha_streaming(X, y, cov_inv)
+
+
+    return {'loss': losses.mean().item(), 'intra_cos': intra_cos, 'inter_cos': inter_cos, 'intra_maha': intra_maha, 'inter_maha': inter_maha}
+
+
+class EarlyStopping:
+    def __init__(self, patience=10, min_delta=0.001):
+        """
+        Args:
+            patience (int): How many epochs to wait for improvement.
+            delta_ratio (float): Fraction of best loss to use as min_delta.
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_val_loss = float('inf')
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+
+        if val_loss < self.best_val_loss - self.min_delta:
+            self.best_val_loss = val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter > self.patience:
+                self.early_stop = True
+
 if __name__ == "__main__":
     # Parameters
     model_config = ModelConfig(
@@ -114,12 +287,12 @@ if __name__ == "__main__":
         dropout= 0.2, # Dropout probability 
         n_layers= 5, # Number of layers or transformer encoders
         d_output_emb= 64, # Output embedding dimension
-        n_users = 69, # Number of users (For classification)
-        contrastive_loss_alpha = 2 # Contrastive loss importance hyperparameter (Alpha)
+        n_users = 84, # Number of users (For classification)
+        contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
-    batch_size = 64 # Batch size
+    batch_size = 256 # Batch size
     same_user_ratio_in_batch = 0.25 # Ratio of same user pair sequences in the batch
     n_epochs = 10 # Number of epochs
 
@@ -138,7 +311,15 @@ if __name__ == "__main__":
     with open(test_dataset_file, "rb") as infile:
         test_dataset = pickle.load(infile)
 
-    # train_dataset = merge_sequences(train_dataset, 30)
+    # Combining the training and validation users.
+    train_dataset = train_dataset + val_dataset
+
+    # Splitting into train and val dataset by sessions -> Num. of users remain the same
+    train_dataset, val_dataset = split_training_data_by_sessions(train_dataset, 0.2)
+
+    # UNCOMMENT BELOW TO MERGE SEQUENCES i.e Have more than 10 second sequences
+    # train_dataset = merge_sequences_overlap(train_dataset, 30, 20)
+    # val_dataset = merge_sequences_overlap(val_dataset, 30, 20)
 
     # Means and std. deviations for normalization
     means_for_normalization = np.array([]) 
@@ -157,9 +338,12 @@ if __name__ == "__main__":
         device="mps"
     print("Device: ", device)
 
-    # Data Loader
-    dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=model_config.seq_len, 
+    # Data Loaders | Training dataloader uses a Contrastive Sampler
+    training_dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=model_config.seq_len, 
                                          required_feature_dim=model_config.d_model, num_workers=1)
+    
+    val_dataloader = get_testing_dataloader(test_data=val_dataset, batch_size=batch_size, sequence_length=model_config.seq_len, 
+                                            required_feature_dim=model_config.d_model, num_workers=1)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')
@@ -171,14 +355,12 @@ if __name__ == "__main__":
     # Moving the model to the device used for training
     model.to(device)
 
-    # print("Model")
-    # for k, v in model.state_dict().items():
-    #     print(k, v.shape)
-
-    steps_per_epoch = len(dataloader) # Number of steps in an epoch OR number of batches
+    steps_per_epoch = len(training_dataloader) # Number of steps in an epoch OR number of batches
     total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
+
     print("steps_per_epoch", steps_per_epoch, "total_steps_to_train", total_steps_to_train)
-    max_lr = 6e-4 # 0.0006 # 1e-4
+
+    max_lr = 5e-3 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
     warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
 
@@ -206,26 +388,42 @@ if __name__ == "__main__":
     torch.set_printoptions(threshold=torch.inf)
     torch.autograd.set_detect_anomaly(True)
 
-    step_count = 0
-    for epoch in range(n_epochs):
-        for batch in dataloader:
-            print("--Step--", step_count)
+    # Best validation loss
+    best_val_loss = math.inf 
 
+    start_epoch_count = 0
+    step_count = 0
+
+    # To store validation losses list, for plotting 
+    val_losses = []
+
+    # Loading the model from checkpoint if training is being continued
+    mode = {'type': "SCRATCH", 'checkpoint_file': ""}
+    if mode['type'] == "RESUME":
+        checkpoint = torch.load(mode['checkpoint_file'], weights_only=False)
+        model_config = checkpoint['config']
+        model = Model(model_config)
+        model.to(device)
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        start_epoch_count = checkpoint['epoch'] + 1
+        step_count = checkpoint['step_count']
+        val_losses = checkpoint['val_losses']
+        best_val_loss = checkpoint['loss']
+        max_lr = checkpoint['max_lr']
+        min_lr = checkpoint['min_lr']
+
+    # Early stopper
+    early_stopper = EarlyStopping(patience=10, min_delta=0.001)
+
+    for epoch in range(start_epoch_count, n_epochs):
+        for batch in training_dataloader:
             optimizer.zero_grad() # Zeroing the gradients
 
             sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
-
-            print("Batch Stats -------")
-            print(f"Mean: {sequences.mean()} | Std: {sequences.std()}")
             labels = batch['user_ids'] # User IDs (batch_size (B))
             temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
             channel_attention_mask = batch['channel_attention_mask'] # (B, C)
-
-            # print("Temportal Mask -----------------")
-            # print(temporal_attention_mask)
-            # print("Channel Mask ------------------")
-            # print(channel_attention_mask)
-            # print("----------------------------------")
 
             # Moving the tensors to device
             sequences = sequences.to(device)
@@ -233,20 +431,13 @@ if __name__ == "__main__":
             temporal_attention_mask = temporal_attention_mask.to(device)
             channel_attention_mask = channel_attention_mask.to(device)
 
-             # Using BF16
-            # with torch.autocast(device_type=device, dtype=torch.bfloat16):
-                # Forward Pass
             emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
 
             # Backprop
             loss.backward()
 
-            # raw_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in model.parameters() if p.grad is not None]), 2.0)
-            # print(f"Raw Gradient Norm: {raw_norm}")
-
             # Clipping the global norm of the gradient
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
 
             # Updating the weights
             # determine and set the learning rate for this iteration
@@ -256,47 +447,44 @@ if __name__ == "__main__":
             optimizer.step() # Updating the weights
 
             torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
-            # print("Parameters")
-            # for name, param in model.named_parameters():
-            #     print(f"Parameter name: {name}, Shape: {param.shape}")
-            #     print(param)
-            #     print("===================================")
-            # print("Embeddings")
-            # print(emb)
-            # print("Logits")
-            # print(logits)
-            # plt.figure(figsize=(20, 4))
-            # legends = []
-            # for name, param in model.named_parameters():
-            #         if param.grad is not None and param.grad.numel() >= 2:
-            #             grad = param.grad.cpu()
-            #             grad_norm = torch.norm(grad).item()
-            #             grad_mean = grad.mean().item()
-            #             grad_var = grad.std().item()
-            #             print(f"{name} | Grad Norm: {grad_norm:.4f} | Grad Mean: {grad_mean:.6f} | Grad var: {grad_var:.6f}")
-                        # hy, hx = torch.histogram(grad, density=True)
-                        # plt.plot(hx[:-1].detach(), hy.detach())
-                        # legends.append(f'layer {name}')
 
-            # plt.legend(legends)
-            # plt.title('gradient distribution')
-            # plt.show()
-            print("--")
             print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
+            print("--")
 
             step_count += 1
 
         # After every epoch - Validate
-        classification_accuracy, key_wise_stats, best_eer = validate(model=model, dataset=val_dataset, num_of_enrollment_sessions=3, device=device)
+        val_metrics = validate(val_dataloader=val_dataloader)
+        val_loss = val_metrics['loss']
+        val_losses.append(val_loss)
+        print(f"Validation Loss: {val_loss}")
+        print(val_metrics)
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            checkpoint = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+                'loss': val_loss,
+                'val_metrics': val_metrics,
+                'config': model_config,
+                'step_count': step_count,
+                'max_lr': max_lr,
+                'min_lr': min_lr,
+                'val_losses': val_losses,
+                'means_for_normalization': means_for_normalization,
+                'stds_for_normalization': stds_for_normalization,
+                'same_user_ratio_in_batch': same_user_ratio_in_batch,
+                'screen_dim_x': screen_dim_x,
+                'screen_dim_y': screen_dim_y
 
-        print(f"Best EER: {best_eer}, Classification Accuracy: {classification_accuracy}")
-        for key, value in key_wise_stats.items():
-            print(f"Key: {key}, frr': {value['frr_at_threshold']}, far: {value['far_at_threshold']}, eer: {value['eer']}, 'threshold': {value['threshold']},  auc: {value['auc']}")
-            
-            
-
-    
-
+            }
+            torch.save(checkpoint, f"./checkpoints/best_val_epoch{epoch}_seq_len{model_config.seq_len}_v1.pt")
+        
+         # Checking for early stop
+        early_stopper(val_loss)
+        if early_stopper.early_stop:
+            break
 
         
     

@@ -6,7 +6,7 @@ import random
 import math
 import inspect
 import numpy as np
-from sklearn.covariance import EmpiricalCovariance
+from sklearn.covariance import EmpiricalCovariance, LedoitWolf
 from sklearn.metrics import roc_curve, roc_auc_score
 from model import Model, ModelConfig
 from data_loader import get_training_dataloader, get_testing_dataloader
@@ -27,8 +27,10 @@ def prepare_validation_model(model: Model, num_of_valid_users,  device):
     return validation_model
 
 def prepare_dataset(dataset, num_of_valid_users, num_of_enrollment_sessions):
+    random.seed(42)
     # Indices of valid users, selected at random
     valid_user_indices = random.sample(range(len(dataset)), num_of_valid_users)
+    print("Valid User Indices", valid_user_indices)
 
     # Valid users from the dataset
     valid_users = [dataset[i] for i in valid_user_indices]
@@ -47,6 +49,7 @@ def prepare_dataset(dataset, num_of_valid_users, num_of_enrollment_sessions):
                     
         # Randomly select the num_of_enrollment_sessions from the sessions which the users has
         enrollment_session_indices = random.sample(valid_sessions, num_of_enrollment_sessions)
+        print("User Enrollment Session Indices", enrollment_session_indices)
 
         # Adding enrollment sessions to the valid_users_enrollment_data
         valid_users_enrollment_data.append([user[i] for i in enrollment_session_indices])
@@ -54,10 +57,13 @@ def prepare_dataset(dataset, num_of_valid_users, num_of_enrollment_sessions):
         # Adding verification sessions to the valid_users_verify_data
         valid_users_verify_data.append([user[i] for i in range(len(user)) if i not in enrollment_session_indices])
     
+    print("Enrollment Data Size", sum(len(sequence) for user in valid_users_enrollment_data for session in user for sequence in session ))
     return valid_users_enrollment_data, valid_users_verify_data, unauthorized_users_data
 
 def finetune(model, model_config, valid_users_enrollment_data, batch_size, device):
     
+    print("---------- FINETUNING ----------------")
+
     # Fine tuning the model on the enrollment data
     same_user_ratio_in_batch = 0.25 # Ratio of same user pairs in each batch
 
@@ -68,16 +74,17 @@ def finetune(model, model_config, valid_users_enrollment_data, batch_size, devic
     # # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')
 
-    n_epochs = 5
+    n_epochs = 10
     steps_per_epoch = len(dataloader) # Number of steps in an epoch OR number of batches
     total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
-    print("---------- FINETUNING ----------------")
+
     print("steps_per_epoch", steps_per_epoch, "total_steps_to_train", total_steps_to_train)
-    max_lr = 1e-4 
+
+    max_lr = 6e-4
     min_lr = max_lr * 0.1
     warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
 
-    # # Cosine decay with linear warmup learning rate schedule
+    # Cosine decay with linear warmup learning rate schedule
     def get_lr(iteration):
         # Linear warmup
         if iteration < warmup_steps:
@@ -98,13 +105,11 @@ def finetune(model, model_config, valid_users_enrollment_data, batch_size, devic
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
     # Tell PyTorch to print the full tensor
-    torch.set_printoptions(threshold=torch.inf)
     torch.autograd.set_detect_anomaly(True)
 
     step_count = 0
     for epoch in range(n_epochs):
         for batch in dataloader:
-            print("--Step--", step_count)
             optimizer.zero_grad() # Zeroing the gradients
 
             sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
@@ -136,7 +141,6 @@ def finetune(model, model_config, valid_users_enrollment_data, batch_size, devic
             optimizer.step() # Updating the weights
 
             torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
-            print("--")
             print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
 
             step_count += 1
@@ -195,7 +199,7 @@ def prepare_ood(model: Model, dataloader, device):
     centered_bank = (bank - class_mean[label_bank]).detach().cpu().numpy()
 
     # Calculating the Covariance matrix over all the classes (For Mahalonobis distance)
-    precision = EmpiricalCovariance().fit(centered_bank).precision_.astype(np.float32)
+    precision = LedoitWolf().fit(centered_bank).precision_.astype(np.float32)
     class_var = torch.from_numpy(precision).float().to(device=device)
 
     model.train()
@@ -279,7 +283,7 @@ def compute_ood_scores(model: Model, dataloader, all_classes, class_mean, class_
 
 
 
-def validate(model, dataset, num_of_enrollment_sessions, device):
+def evaluate(model, dataset, num_of_enrollment_sessions, device):
     
     print("--------------------- VALIDATION -----------------------")
     num_of_valid_users = 3
@@ -294,7 +298,7 @@ def validate(model, dataset, num_of_enrollment_sessions, device):
     valid_users_enrollment_data, valid_users_verify_data, unauthorized_users_data = prepare_dataset(dataset=dataset, num_of_valid_users=num_of_valid_users, num_of_enrollment_sessions=num_of_enrollment_sessions)
 
     # Finetuning the model on the enrollment data
-    finetune_dataloader = finetune(model=validation_model, model_config=model_config, valid_users_enrollment_data=valid_users_enrollment_data, batch_size=32, device=device)
+    finetune_dataloader = finetune(model=validation_model, model_config=model_config, valid_users_enrollment_data=valid_users_enrollment_data, batch_size=64, device=device)
 
     # Calculating the class means, variance and normalized embeddings from the enrollment data
     class_mean, class_var, norm_bank, all_classes = prepare_ood(model=validation_model, dataloader=finetune_dataloader, device=device)
@@ -357,6 +361,9 @@ def validate(model, dataset, num_of_enrollment_sessions, device):
 
     # Returning classification accuracy and scores of each
     return classification_accuracy, key_wise_stats, best_eer
+
+
+
 
 
 

@@ -230,7 +230,7 @@ class Model(nn.Module):
             # (B,B) where 1 represents examples belonging to different users.
             neg_mask = (targets.unsqueeze(1) != targets.unsqueeze(0)).float()
             # Maximum distance of instances belonging to same labels - Acts as the margin
-            max_dist = (dist * pos_mask).max()
+            max_dist = 10
             # Contrastive Loss
             cos_loss = (dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3) + (F.relu(max_dist - dist) * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)
             cos_loss = cos_loss.mean()
@@ -240,6 +240,6 @@ class Model(nn.Module):
 
             # Total Loss
             loss = cross_entropy_loss + (self.config.contrastive_loss_alpha * cos_loss)
-        
+            print("cos_loss", cos_loss.item(), " --- ", (self.config.contrastive_loss_alpha * cos_loss).item(), "cross_entropy_loss", cross_entropy_loss.item(), "loss", loss.item())
         # Return embeddings, logits and loss
         return out, logits, loss 

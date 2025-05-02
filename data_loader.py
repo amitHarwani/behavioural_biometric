@@ -1,5 +1,6 @@
 import torch
 import random
+import math
 from collections import defaultdict
 from torch.utils.data import Dataset, DataLoader, Sampler
 from numpy.typing import NDArray
@@ -171,6 +172,51 @@ class ContrastiveSampler(Sampler):
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size # Equivalent to math.ceil(len(self.dataset)/ self.batch_size)
 
 
+class ContrastiveSampler2(Sampler):
+    """
+    Produces batches of indices so that:
+      - Every sequence index appears exactly once per epoch.
+      - Within each batch, any class that appears, appears at least twice (i.e. in positive pairs).
+    """
+    def __init__(self, dataset:TrainingDataset, batch_size):
+        """
+        labels: list of class‐IDs for each sample in the dataset
+        batch_size: must be even (we form pairs)
+        """
+        assert batch_size % 2 == 0, "batch_size must be even"
+        self.dataset = dataset
+        self.user_to_indices = dataset.user_to_indices
+        self.users = list(self.user_to_indices.keys()) 
+        self.batch_size = batch_size
+
+    def _prepare_epoch(self):
+        # Build list of (i,j) pairs for all classes
+        pairs = []
+        for user, idxs in self.user_to_indices.items():
+            idxs_copy = idxs.copy()
+            random.shuffle(idxs_copy)
+            # if odd count, duplicate one index to make a pair
+            if len(idxs_copy) % 2 == 1:
+                idxs_copy.append(random.choice(idxs_copy))
+            # chunk into pairs
+            for k in range(0, len(idxs_copy), 2):
+                pairs.append((idxs_copy[k], idxs_copy[k+1]))
+        random.shuffle(pairs)
+
+        # flatten to a single list of indices
+        self.epoch_indices = [i for pair in pairs for i in pair]
+
+    def __iter__(self):
+        # at each epoch, re-build & shuffle
+        self._prepare_epoch()
+        # yield in batch_size chunks
+        for start in range(0, len(self.epoch_indices), self.batch_size):
+            yield self.epoch_indices[start:start + self.batch_size]
+
+    def __len__(self):
+        # number of batches per epoch
+        return math.ceil(len(self.dataset) / self.batch_size)
+
 def collate_fn(batch, max_sequence_len, required_feature_dim=64):
     """Collate function to handle variable-length sequences."""
     sequences = [item['sequence'] for item in batch] # All the sequences in the batch
@@ -209,7 +255,8 @@ def collate_fn(batch, max_sequence_len, required_feature_dim=64):
 
 def get_training_dataloader(training_data, batch_size=64, same_user_ratio = 0.25, sequence_length=10, required_feature_dim = 64, num_workers=4) -> DataLoader:
     dataset = TrainingDataset(training_data)
-    sampler = ContrastiveSampler(dataset, batch_size, same_user_ratio)
+    # sampler = ContrastiveSampler(dataset, batch_size, same_user_ratio)
+    sampler = ContrastiveSampler2(dataset, batch_size)
     
     # Using partial to fix the max_sequence_length
     collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length, required_feature_dim = required_feature_dim)
