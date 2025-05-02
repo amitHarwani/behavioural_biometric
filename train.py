@@ -11,7 +11,7 @@ import random
 from collections import defaultdict
 
 from model import ModelConfig, Model
-from data_loader import get_training_dataloader, get_testing_dataloader
+from data_loader import get_training_dataloader, get_validation_dataloader, get_testing_dataloader
 
 # import sys
 
@@ -187,8 +187,14 @@ def intra_inter_maha_streaming(X, y, cov_inv, chunk_size=512):
         # drop the block → memory freed before next iteration
 
     # convert mean squared distances → mean distances
-    intra_maha = float((same_sum  / same_count)**0.5)
-    inter_maha = float((diff_sum  / diff_count)**0.5)
+    if same_count != 0:
+        intra_maha = float((same_sum  / same_count)**0.5)
+    else:
+        intra_maha = float('nan')
+    if diff_count != 0:
+        inter_maha = float((diff_sum  / diff_count)**0.5)
+    else:
+        inter_maha = float('nan')
 
     return intra_maha, inter_maha
 
@@ -280,6 +286,7 @@ if __name__ == "__main__":
     # Parameters
     model_config = ModelConfig(
         k = 6, # Number of gaussians in GRE
+        raw_d_model = 62, # Num. of features in raw dataset
         d_model= 64, # Num. of features
         seq_len= 10, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
@@ -292,7 +299,7 @@ if __name__ == "__main__":
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
-    batch_size = 256 # Batch size
+    batch_size = 64 # Batch size
     same_user_ratio_in_batch = 0.25 # Ratio of same user pair sequences in the batch
     n_epochs = 10 # Number of epochs
 
@@ -340,10 +347,10 @@ if __name__ == "__main__":
 
     # Data Loaders | Training dataloader uses a Contrastive Sampler
     training_dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=model_config.seq_len, 
-                                         required_feature_dim=model_config.d_model, num_workers=1)
+                                         required_feature_dim=model_config.raw_d_model, num_workers=1)
     
-    val_dataloader = get_testing_dataloader(test_data=val_dataset, batch_size=batch_size, sequence_length=model_config.seq_len, 
-                                            required_feature_dim=model_config.d_model, num_workers=1)
+    val_dataloader = get_validation_dataloader(val_data=val_dataset, batch_size=batch_size, sequence_length=model_config.seq_len, 
+                                            required_feature_dim=model_config.raw_d_model, num_workers=1)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')

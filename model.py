@@ -7,6 +7,7 @@ from dataclasses import dataclass
 @dataclass
 class ModelConfig:
     k: int = 6 # Num. of Gaussians in Positional Encoding
+    raw_d_model: int = 62 # Num. of features in raw dataset
     d_model: int = 62 # Num. of Features
     seq_len: int = 10 # Sequence length
     n_temporal_heads: int = 5 # Num. of temporal heads
@@ -111,7 +112,7 @@ class TransformerEncoderLayer(nn.Module):
         # After attention and attention norm - B x seq_len x d_model
         src_normalized = self.ln_1(src)
         src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized, key_padding_mask=temporal_attn_mask)[0] 
-        + self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), key_padding_mask = channel_attn_mask)[0].transpose(-1, -2)
+        + self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2))[0].transpose(-1, -2)
         
         # print(f"After Attention mean: {src.mean()} | std: {src.std()}")
         # CNN + src for residual connection, Layer Norm Applied befor cnn
@@ -176,16 +177,21 @@ class Model(nn.Module):
         
         self.config = config
 
+        # Linear layer for converting raw feature dimension to required feature dimension
+        self.linear_proj_1 = nn.Linear(config.raw_d_model, config.d_model)
+
         # Output of the below is = B x seq_len x d_model
         self.transformer = Transformer(config)
         
         # Flatten (B x seq_len x d_model) to (B x seq_len*d_model) and passed to linear layer
         # Output of below is (B x d_output_emb)
-        self.linear_proj = nn.Sequential(
+        self.linear_proj_2 = nn.Sequential(
             nn.Linear(config.seq_len * config.d_model, ((config.seq_len * config.d_model) // 2)),
+            nn.LayerNorm((config.seq_len * config.d_model) // 2),
             nn.ReLU(),
             nn.Dropout(config.dropout),
             nn.Linear(((config.seq_len * config.d_model) // 2), config.d_output_emb),
+            nn.LayerNorm(config.d_output_emb),
             nn.ReLU()
         )
 
@@ -208,7 +214,7 @@ class Model(nn.Module):
         # Input: B x seq_len x d_model
 
         # Flatten to convert from B x seq_len x d_model to B*seq_len x d_model
-        out = self.linear_proj(torch.flatten(self.transformer(inputs, temporal_attn_mask, channel_attn_mask), start_dim=1, end_dim=2))
+        out = self.linear_proj_2(torch.flatten(self.transformer(self.linear_proj_1(inputs), temporal_attn_mask, channel_attn_mask), start_dim=1, end_dim=2))
         
         # print(f"After Linear Projection mean: {out.mean()} | std: {out.std()}")
 
@@ -229,6 +235,7 @@ class Model(nn.Module):
             pos_mask = pos_mask - torch.diag(torch.diag(pos_mask))
             # (B,B) where 1 represents examples belonging to different users.
             neg_mask = (targets.unsqueeze(1) != targets.unsqueeze(0)).float()
+            print("Positive Sum", ((dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3)).mean().item(), "Negative Sum", ((dist * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)).mean().item())
             # Maximum distance of instances belonging to same labels - Acts as the margin
             max_dist = 10
             # Contrastive Loss

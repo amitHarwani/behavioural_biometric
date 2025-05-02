@@ -37,7 +37,44 @@ class TrainingDataset(Dataset):
             'user_id': self.user_ids[idx]
         }
     
+class ValidationDataset(Dataset):
+    
+    def __init__(self, data: list[list[list[NDArray]]]):
+        """
+        Args:
+            data: [users][sessions][sequences] hierarchical data
+        """
+        self.sequences = []
+        self.user_ids = []
+        
+        # Flatten the data while tracking user IDs
+        idx = 0 # Global index of sequences across all users and sessions
+        for user_idx, user_data in enumerate(data):
+            for session in user_data:
+                for sequence in session:
+                    self.sequences.append(torch.tensor(sequence)) # Appending the sequence(10,62) ndarray to sequences list
+                    self.user_ids.append(user_idx) # Appending the user id of the sequence to user_ids
+                    idx += 1
+        
 
+        # Manually shuffling the sequences (So that each epoch has the same order of batches, For Comparing Validation losses)
+        torch.manual_seed(42)
+        perm = torch.randperm(len(self.sequences))
+        self.sequences = [self.sequences[i] for i in perm]
+        self.user_ids = [self.user_ids[i] for i in perm]
+
+       
+    
+    def __len__(self):
+        return len(self.sequences) # Size of dataset = num. of sequences
+    
+    def __getitem__(self, idx):
+        # When getting a item return the sequence as well as the user whom it belongs to
+        return {
+            'sequence': self.sequences[idx],
+            'user_id': self.user_ids[idx]
+        }
+    
 class TestingDataset(Dataset):
     
     def __init__(self, data: list[list[list[NDArray]]]):
@@ -269,6 +306,22 @@ def get_training_dataloader(training_data, batch_size=64, same_user_ratio = 0.25
         collate_fn=collate_fn_initialized
     )
     
+    return dataloader
+
+def get_validation_dataloader(val_data, batch_size=64, sequence_length=10, required_feature_dim=64, num_workers=4) -> DataLoader:
+    # Validation dataset
+    dataset = ValidationDataset(val_data)
+
+    # Using partial to fix the max_sequence_length
+    collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length, required_feature_dim = required_feature_dim)
+
+    dataloader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        collate_fn=collate_fn_initialized,
+    )
+
     return dataloader
 
 def get_testing_dataloader(test_data, batch_size=64, sequence_length=10, required_feature_dim=64, num_workers=4) -> DataLoader:
