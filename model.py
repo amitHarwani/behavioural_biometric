@@ -263,7 +263,9 @@ class Model(nn.Module):
             pos_mask = pos_mask - torch.diag(torch.diag(pos_mask))
             # (B,B) where 1 represents examples belonging to different users.
             neg_mask = (targets.unsqueeze(1) != targets.unsqueeze(0)).float()
-            print("Positive Sum", ((dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3)).mean().item(), "Negative Sum", ((dist * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)).mean().item())
+
+            if self.training:
+                print("Positive Sum", ((dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3)).mean().item(), "Negative Sum", ((dist * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)).mean().item())
             # Maximum distance of instances belonging to same labels - Acts as the margin
             max_dist = 10
             # Contrastive Loss
@@ -275,6 +277,5 @@ class Model(nn.Module):
 
             # Total Loss
             loss = cross_entropy_loss + (self.config.contrastive_loss_alpha * cos_loss)
-            print("cos_loss", cos_loss.item(), " --- ", (self.config.contrastive_loss_alpha * cos_loss).item(), "cross_entropy_loss", cross_entropy_loss.item(), "loss", loss.item())
         # Return embeddings, logits and loss
-        return out, logits, loss 
+        return out, logits, cos_loss, cross_entropy_loss, loss 

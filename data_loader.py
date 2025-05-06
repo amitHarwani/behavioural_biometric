@@ -55,16 +55,6 @@ class ValidationDataset(Dataset):
                     self.sequences.append(torch.tensor(sequence)) # Appending the sequence(10,62) ndarray to sequences list
                     self.user_ids.append(user_idx) # Appending the user id of the sequence to user_ids
                     idx += 1
-        
-
-        # Manually shuffling the sequences (So that each epoch has the same order of batches, For Comparing Validation losses)
-        torch.manual_seed(42)
-        perm = torch.randperm(len(self.sequences))
-        self.sequences = [self.sequences[i] for i in perm]
-        self.user_ids = [self.user_ids[i] for i in perm]
-
-       
-    
     def __len__(self):
         return len(self.sequences) # Size of dataset = num. of sequences
     
