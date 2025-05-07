@@ -9,6 +9,11 @@ import inspect
 import matplotlib.pyplot as plt
 import random
 from collections import defaultdict
+from sklearn.covariance import EmpiricalCovariance, LedoitWolf
+from sklearn.metrics import roc_curve, roc_auc_score
+from scipy.optimize import brentq
+from scipy.interpolate import interp1d
+
 
 from model import ModelConfig, Model
 from data_loader import get_training_dataloader, get_validation_dataloader, get_testing_dataloader
@@ -125,163 +130,281 @@ def merge_sequences_overlap(training_data, merge_length, overlap_length):
     return merged_data
 
 
-# Splitting validation data
-def split_training_data_by_sessions(data, validation_ratio=0.2):
-    random.seed(42) # For reproducibility
-    train_data = []
-    val_data = []
+def compute_exact_eer(y_true, y_score, pos_label=1):
+    # 1) Compute discrete ROC curve
+    fpr, tpr, thresholds = roc_curve(y_true, y_score, pos_label=pos_label)
+    fnr = 1 - tpr
 
-    for user in data:
-        # Shuffle the sessions for randomness
-        random.shuffle(user)
-        num_val_sessions = int(len(user) * validation_ratio)
+    # 2) Build continuous interpolants FPR(x), FNR(x) over x in [0,1]
+    #    We parameterize by FPR, so we interpolate TPR and thresholds as functions of FPR.
+    tpr_interp = interp1d(fpr, tpr)
+    thresh_interp = interp1d(fpr, thresholds)
 
-        # Split sessions into training and validation
-        val_data.append(user[:num_val_sessions])
-        train_data.append(user[num_val_sessions:])
+    # 3) Find EER by solving 1 - x - TPR(x) = 0  <=>  FPR = FNR
+    #    i.e. find x in [0,1] such that x = 1 - TPR(x)
+    eer = brentq(lambda x: x - (1 - tpr_interp(x)), 0.0, 1.0)  # root-finding :contentReference[oaicite:0]{index=0}
 
-    return train_data, val_data
+    # 4) Recover the threshold at that operating point
+    eer_threshold = float(thresh_interp(eer))
 
-def intra_inter_maha_streaming(X, y, cov_inv, chunk_size=512):
-    # X: (N,D), y: (N,), cov_inv: (D,D)
-    N = X.shape[0]
-    # center X once:
-    mu = X.mean(0, keepdim=True)
-    Xc = X - mu
+    return eer, eer_threshold
 
-    # 1) diag terms δ_i
-    #    δ_i = x_i^T Σ⁻¹ x_i
-    #    shape: (N,)
-    δ = (Xc @ cov_inv * Xc).sum(dim=1)
-
-    # prepare masks and accumulators
-    lbl_eq = y.unsqueeze(1) == y.unsqueeze(0)
-    # we will accumulate sum of d^2 over same‐class and diff‐class
-    same_sum = 0.0
-    same_count = 0
-    diff_sum = 0.0
-    diff_count = 0
-
-    # 2) process in chunks of rows
-    for start in range(0, N, chunk_size):
-        end = min(start + chunk_size, N)
-        Xi = Xc[start:end]               # (K, D)
-        δi = δ[start:end].unsqueeze(1)   # (K, 1)
-
-        # compute block M_block = Xi Σ⁻¹ Xcᵀ → shape (K, N)
-        M_block = Xi @ cov_inv @ Xc.t()  # (K, N)
-
-        # compute squared-distance block: δ_i + δ_j - 2 M_ij
-        # broadcast δ_i over columns, δ over rows
-        d2_block = δi + δ.unsqueeze(0) - 2.0 * M_block
-
-        # now mask and accumulate
-        mask_block = lbl_eq[start:end]   # (K, N)
-        same_sum  += d2_block[mask_block].sum().item()
-        same_count+= mask_block.sum().item()
-
-        diff_mask = ~mask_block
-        diff_sum  += d2_block[diff_mask].sum().item()
-        diff_count+= diff_mask.sum().item()
-
-        # drop the block → memory freed before next iteration
-
-    # convert mean squared distances → mean distances
-    if same_count != 0:
-        intra_maha = float((same_sum  / same_count)**0.5)
-    else:
-        intra_maha = float('nan')
-    if diff_count != 0:
-        inter_maha = float((diff_sum  / diff_count)**0.5)
-    else:
-        inter_maha = float('nan')
-
-    return intra_maha, inter_maha
+# Example usage:
+# eer_value, thresh = compute_exact_eer(y_true, y_scores)
+# print(f"EER = {eer_value:.4f} ({eer_value*100:.2f}%), at threshold = {thresh:.4f}")
 
 @torch.no_grad()
-def validate(val_dataloader):
-    # Putting the model in eval mode
+def validate(val_dataset, num_of_enrollment_sessions, num_of_verify_sessions, device, batch_size=32):
+    """
+    Validates the model by enrolling users and verifying them using their sequences.
+    Calculates the Equal Error Rate (EER) for cosine similarity and Mahalanobis distance separately.
+    
+    Args:
+        val_dataset: Dataset containing user sessions
+        num_of_enrollment_sessions: Number of sessions to use for enrollment
+        num_of_verify_sessions: Number of sessions to use for verification
+        batch_size: Batch size for processing sequences
+        
+    Returns:
+        tuple: (average_cosine_eer, average_mahalanobis_eer)
+    """
+    # Putting the model in evaluation mode
     model.eval()
-    losses = torch.zeros(len(val_dataloader))
+    
+    # To store EERs for all users
+    cosine_user_eers = []
+    exact_cosine_user_eers = []
+    mahalanobis_user_eers = []
+    exact_mahalanobis_user_eers = []
+    
+    total_users = len(val_dataset)  
+    
+    for user_idx, user_sessions in enumerate(val_dataset):
+        # Enrollment and verification sessions of the user
+        enrollment_sessions = user_sessions[:num_of_enrollment_sessions]
+        verification_sessions = user_sessions[num_of_enrollment_sessions:num_of_enrollment_sessions + num_of_verify_sessions]
+        
+        # Process enrollment sequences in batches
+        enrollment_embeddings = []
 
-    all_embs = []  # emb: (N: number of samples, D)
-    all_labels = []  # (N,)
-    for idx, batch in enumerate(val_dataloader):
-        sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
-        labels = batch['user_ids'] # User IDs (batch_size (B))
-        temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
-        channel_attention_mask = batch['channel_attention_mask'] # (B, C)
+        # Validation Data Loader
+        genuine_user_enrollment_loader = get_validation_dataloader([enrollment_sessions], batch_size=batch_size, 
+                                  sequence_length=model_config.seq_len, required_feature_dim=model_config.raw_d_model, num_workers=1)
+        
+        for batch in genuine_user_enrollment_loader:
+            sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+            labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+            temporal_attention_mask = batch['temporal_attention_mask'].to(device) # (B, T)
+            channel_attention_mask = batch['channel_attention_mask'].to(device) # (B, C)
 
-        # Moving the tensors to device
-        sequences = sequences.to(device)
-        labels = labels.to(device)
-        temporal_attention_mask = temporal_attention_mask.to(device)
-        channel_attention_mask = channel_attention_mask.to(device)
+            # Passing it through the model
+            emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, 
+                                                                    channel_attn_mask=channel_attention_mask, targets=labels)
+            enrollment_embeddings.append(emb)
+        
+        enrollment_embeddings = torch.cat(enrollment_embeddings, dim=0).to(device)
+        
+        # Compute mean embedding for the user
+        user_mean_embedding = enrollment_embeddings.mean(dim=0, keepdim=True)  # (1, d_output_emb)
 
-        emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
-        losses[idx] = loss
+        # Prepare Mahalanobis distance covariance matrix
+        centered_embeddings = enrollment_embeddings - user_mean_embedding
+        precision_matrix = LedoitWolf().fit(centered_embeddings.cpu().numpy()).precision_.astype(np.float32)
+        precision_matrix = torch.tensor(precision_matrix, dtype=torch.float32).to(device)
 
-        all_embs.append(emb)      
-        all_labels.append(labels)
+        # Initialize score lists for this user
+        cosine_genuine_scores = []
+        cosine_impostor_scores = []
+        mahalanobis_genuine_scores = []
+        mahalanobis_impostor_scores = []
 
-    model.train() # Putting the model back in training mode
+         # Validation Data Loader
+        genuine_user_verification_loader = get_validation_dataloader([verification_sessions], batch_size=batch_size, 
+                                  sequence_length=model_config.seq_len, required_feature_dim=model_config.raw_d_model, num_workers=1)
+        
+        
+        # Process verification sequences in batches
+        verification_embeddings = []
+        for batch in genuine_user_verification_loader:
+            sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+            labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+            temporal_attention_mask = batch['temporal_attention_mask'].to(device) # (B, T)
+            channel_attention_mask = batch['channel_attention_mask'].to(device) # (B, C)
 
-    X = torch.cat(all_embs, dim=0)   # (N, D)
-    y = torch.cat(all_labels, dim=0) # (N,)
+            # Passing it through the model
+            emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, 
+                                                                    channel_attn_mask=channel_attention_mask, targets=labels)
+            verification_embeddings.append(emb)
+        
+        verification_embeddings = torch.cat(verification_embeddings, dim=0).to(device)
 
-    N, D = X.shape
+        # Calculate cosine similarity scores
+        cosine_scores_matrix = F.cosine_similarity(
+            verification_embeddings.unsqueeze(1),  # (num_verification_sequences, 1, d_output_emb)
+            enrollment_embeddings.unsqueeze(0),    # (1, num_enrollment_sequences, d_output_emb)
+            dim=-1
+        )  # Result: (num_verification_sequences, num_enrollment_sequences)
 
-    # # 1) Cosine‐similarity matrix
-    # X_norm = F.normalize(X)      # (N, D)
-    # cosim = X_norm @ X_norm.t()              # (N, N)
+        # Average similarity across all enrollment sequences
+        cosine_scores = cosine_scores_matrix.mean(dim=1)  # (num_verification_sequences,)
+        cosine_genuine_scores.extend(cosine_scores.cpu().tolist())
 
-    # # create masks
-    # lbl_eq = y.unsqueeze(1) == y.unsqueeze(0)  # (N, N)
-    # same_mask = lbl_eq.fill_diagonal_(False)   # exclude self‐pairs
-    # diff_mask = ~lbl_eq
+        # Calculate Mahalanobis distance scores
+        centered_verification_embeddings = verification_embeddings - user_mean_embedding
+        
+        # Process Mahalanobis calculation in batches for large verification sets
+        maha_scores = []
+        for i in range(0, centered_verification_embeddings.size(0), batch_size):
+            batch = centered_verification_embeddings[i:i+batch_size]
+            # For Mahalanobis, smaller values mean closer match, so we negate for consistency
+            # with cosine (where larger means better match)
+            batch_scores = -torch.diag(batch @ precision_matrix @ batch.T)
+            maha_scores.append(batch_scores)
+        
+        maha_scores = torch.cat(maha_scores, dim=0)  # (num_verification_sequences,)
+        mahalanobis_genuine_scores.extend(maha_scores.cpu().tolist())
 
-    # intra_cos = cosim[same_mask].mean()
-    # inter_cos = cosim[diff_mask].mean()
+        # Impostor scores: Compare sequences of other users
+        for other_user_idx in np.random.permutation(total_users):
+            if other_user_idx == user_idx:
+                continue  # Skip the same user
+            
+            # Sessions of the user
+            other_user_sessions = val_dataset[other_user_idx][:num_of_verify_sessions]
+            
+            # Sequences of the verify sessions
+            # other_user_sequences = [
+            #     sequence
+            #     for session in other_user_sessions[:num_of_verify_sessions]
+            #     for sequence in session
+            # ]
 
-     # 2) Mahalanobis distances
-    # compute covariance of X
-    mean = X.mean(dim=0, keepdim=True)        # (1, D)
-    Xc = X - mean                             # (N, D)
-    # unbiased covariance matrix
-    cov = (Xc.t() @ Xc) / (N - 1)             # (D, D)
-    # regularize & invert
-    eps = 1e-5
-    cov_inv = torch.linalg.inv(cov + eps * torch.eye(D, device=X.device))
+            # Limit number of sequences per impostor to avoid bias
+            # max_sequences = min(len(other_user_sequences), 20)
+            # indices = np.random.choice(len(other_user_sequences), max_sequences, replace=False)
+            # selected_sequences = [other_user_sequences[i] for i in indices]
+            
+             # Validation Data Loader - 1 user, 1 session, selected sequences
+            imposter_user_verification_loader = get_validation_dataloader([other_user_sessions], batch_size=batch_size, 
+                                  sequence_length=model_config.seq_len, required_feature_dim=model_config.raw_d_model, num_workers=1)
+                    
+            # Process impostor sequences in batches
+            other_user_embeddings = []
+            for batch in imposter_user_verification_loader:
+                sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+                labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+                temporal_attention_mask = batch['temporal_attention_mask'].to(device) # (B, T)
+                channel_attention_mask = batch['channel_attention_mask'].to(device) # (B, C)
 
-    intra_maha, inter_maha = intra_inter_maha_streaming(X, y, cov_inv)
+                # Passing it through the model
+                emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, 
+                                                                        channel_attn_mask=channel_attention_mask, targets=labels)
+                
+                other_user_embeddings.append(emb)
+                
+            other_user_embeddings = torch.cat(other_user_embeddings, dim=0).to(device)
 
+            # Cosine similarity for impostor sequences
+            cosine_scores_matrix = F.cosine_similarity(
+                other_user_embeddings.unsqueeze(1),  # (num_impostor_sequences, 1, d_output_emb)
+                enrollment_embeddings.unsqueeze(0),  # (1, num_enrollment_sequences, d_output_emb)
+                dim=-1
+            )  # Result: (num_impostor_sequences, num_enrollment_sequences)
 
-    return {'loss': losses.mean().item(), 'intra_cos': 'na', 'inter_cos': 'na', 'intra_maha': intra_maha, 'inter_maha': inter_maha}
+            # Average similarity across all enrollment sequences
+            cosine_scores = cosine_scores_matrix.mean(dim=1)  # (num_impostor_sequences,)
+            cosine_impostor_scores.extend(cosine_scores.cpu().tolist())
 
-@torch.no_grad()
-def estimate_train_loss(train_dataloader):
-    # Putting the model in eval mode
-    model.eval()
-    losses = torch.zeros(len(train_dataloader))
+            # Mahalanobis distance for impostor sequences
+            centered_other_embeddings = other_user_embeddings - user_mean_embedding
+            
+            # Process Mahalanobis calculation in batches
+            maha_scores = []
+            for i in range(0, centered_other_embeddings.size(0), batch_size):
+                batch = centered_other_embeddings[i:i+batch_size]
+                batch_scores = -torch.diag(batch @ precision_matrix @ batch.T)
+                maha_scores.append(batch_scores)
+            
+            maha_scores = torch.cat(maha_scores, dim=0)
+            mahalanobis_impostor_scores.extend(maha_scores.cpu().tolist())
+                                    
 
-    for idx, batch in enumerate(train_dataloader):
-        sequences = batch['sequences'] # (batch_size (B), sequence_length (T), embedding size (C))
-        labels = batch['user_ids'] # User IDs (batch_size (B))
-        temporal_attention_mask = batch['temporal_attention_mask'] # (B, T)
-        channel_attention_mask = batch['channel_attention_mask'] # (B, C)
+        # Calculate EER for the user using cosine similarity
+        if len(cosine_genuine_scores) > 0 and len(cosine_impostor_scores) > 0:
+            cosine_genuine_labels = np.ones(len(cosine_genuine_scores))
+            cosine_impostor_labels = np.zeros(len(cosine_impostor_scores))
 
-        # Moving the tensors to device
-        sequences = sequences.to(device)
-        labels = labels.to(device)
-        temporal_attention_mask = temporal_attention_mask.to(device)
-        channel_attention_mask = channel_attention_mask.to(device)
+            cosine_all_scores = np.concatenate([cosine_genuine_scores, cosine_impostor_scores])
+            cosine_all_labels = np.concatenate([cosine_genuine_labels, cosine_impostor_labels])
+            
+            exact_cosine_eer, _ = compute_exact_eer(cosine_all_labels, cosine_all_scores)
+            exact_cosine_user_eers.append(exact_cosine_eer)
 
-        emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
-        losses[idx] = loss
+            fpr, tpr, thresholds = roc_curve(cosine_all_labels, cosine_all_scores)
+            fnr = 1 - tpr
+            
+            # Check if there are valid values to compute EER
+            if np.any(~np.isnan(fpr)) and np.any(~np.isnan(fnr)):
+                valid_idx = ~np.isnan(fpr) & ~np.isnan(fnr)
+                fpr_valid = fpr[valid_idx]
+                fnr_valid = fnr[valid_idx]
+                
+                if len(fpr_valid) > 0:
+                    idx = np.nanargmin(np.abs(fpr_valid - fnr_valid))
+                    cosine_eer = fpr_valid[idx]
+                    cosine_user_eers.append(cosine_eer)
+                    
+                    # Optionally compute AUC to evaluate performance
+                    auc_score = roc_auc_score(cosine_all_labels, cosine_all_scores)
+                    print(f"User {user_idx} - Cosine EER: {cosine_eer:.4f} - Exact: {exact_cosine_eer:.4f}, AUC: {auc_score:.4f}")
 
-    model.train() # Putting the model back in training mode
+        # Calculate EER for the user using Mahalanobis distance
+        if len(mahalanobis_genuine_scores) > 0 and len(mahalanobis_impostor_scores) > 0:
+            mahalanobis_genuine_labels = np.ones(len(mahalanobis_genuine_scores))
+            mahalanobis_impostor_labels = np.zeros(len(mahalanobis_impostor_scores))
 
-    return {'loss': losses.mean().item()}
+            mahalanobis_all_scores = np.concatenate([mahalanobis_genuine_scores, mahalanobis_impostor_scores])
+            mahalanobis_all_labels = np.concatenate([mahalanobis_genuine_labels, mahalanobis_impostor_labels])
+
+            exact_mahalanobis_eer, _ = compute_exact_eer(mahalanobis_all_labels, mahalanobis_all_scores)
+            exact_mahalanobis_user_eers.append(exact_mahalanobis_eer)
+            
+            fpr, tpr, thresholds = roc_curve(mahalanobis_all_labels, mahalanobis_all_scores)
+            fnr = 1 - tpr
+            
+            # Check if there are valid values to compute EER
+            if np.any(~np.isnan(fpr)) and np.any(~np.isnan(fnr)):
+                valid_idx = ~np.isnan(fpr) & ~np.isnan(fnr)
+                fpr_valid = fpr[valid_idx]
+                fnr_valid = fnr[valid_idx]
+                
+                if len(fpr_valid) > 0:
+                    idx = np.nanargmin(np.abs(fpr_valid - fnr_valid))
+                    mahalanobis_eer = fpr_valid[idx]
+                    mahalanobis_user_eers.append(mahalanobis_eer)
+                    
+                    # Optionally compute AUC to evaluate performance
+                    auc_score = roc_auc_score(mahalanobis_all_labels, mahalanobis_all_scores)
+                    print(f"User {user_idx} - Mahalanobis EER: {mahalanobis_eer:.4f} - Exact: {exact_mahalanobis_eer:.4f}, AUC: {auc_score:.4f}")
+
+    # Average EER across all users
+    avg_cosine_eer = np.mean(cosine_user_eers) if cosine_user_eers else float('inf')
+    avg_mahalanobis_eer = np.mean(mahalanobis_user_eers) if mahalanobis_user_eers else float('inf')
+
+    avg_exact_cosine_eer = np.mean(exact_cosine_user_eers) if exact_cosine_user_eers else float('inf')
+    avg_exact_mahalanobis_eer = np.mean(exact_mahalanobis_user_eers) if exact_mahalanobis_user_eers else float('inf')
+    
+    
+    print(f"\nValidation Complete:")
+    print(f"Total users: {total_users}")
+    print(f"Average Cosine EER: {avg_cosine_eer:.4f} (from {len(cosine_user_eers)} users)")
+    print(f"Average Mahalanobis EER: {avg_mahalanobis_eer:.4f} (from {len(mahalanobis_user_eers)} users)")
+    print(f"Average Exact Cosine EER: {avg_exact_cosine_eer:.4f} (from {len(exact_cosine_user_eers)} users)")
+    print(f"Average Exact Mahalanobis EER: {avg_exact_mahalanobis_eer:.4f} (from {len(exact_mahalanobis_user_eers)} users)")
+
+    model.train()
+    # Return both average EERs
+    return avg_cosine_eer, avg_mahalanobis_eer, avg_exact_cosine_eer, avg_exact_mahalanobis_eer
 
 class EarlyStopping:
     def __init__(self, patience=10, min_delta=0.001):
@@ -315,7 +438,7 @@ if __name__ == "__main__":
         seq_len= 30, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
         n_channel_heads= 5, # Num. of channel heads
-        dropout= 0.2, # Dropout probability 
+        dropout= 0.1, # Dropout probability 
         n_layers= 5, # Number of layers or transformer encoders
         d_output_emb= 64, # Output embedding dimension
         n_users = 84, # Number of users (For classification)
@@ -342,11 +465,6 @@ if __name__ == "__main__":
     with open(test_dataset_file, "rb") as infile:
         test_dataset = pickle.load(infile)
 
-    # Combining the training and validation users.
-    train_dataset = train_dataset + val_dataset
-
-    # Splitting into train and val dataset by sessions -> Num. of users remain the same
-    train_dataset, val_dataset = split_training_data_by_sessions(train_dataset, 0.2)
 
     # UNCOMMENT BELOW TO MERGE SEQUENCES i.e Have more than 10 second sequences
     train_dataset = merge_sequences_overlap(train_dataset, merge_length=30, overlap_length=25)
@@ -359,7 +477,7 @@ if __name__ == "__main__":
     # Normalizing the datasets
     normalize(train_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="train")
     normalize(val_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="val")
-    normalize(test_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="test")
+    # normalize(test_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="test")
 
     # Identifying Device
     device = "cpu"
@@ -373,8 +491,6 @@ if __name__ == "__main__":
     training_dataloader = get_training_dataloader(training_data=train_dataset, batch_size=batch_size, same_user_ratio=same_user_ratio_in_batch, sequence_length=model_config.seq_len, 
                                          required_feature_dim=model_config.raw_d_model, num_workers=1)
     
-    val_dataloader = get_training_dataloader(training_data=val_dataset, batch_size=batch_size, sequence_length=model_config.seq_len, 
-                                            required_feature_dim=model_config.raw_d_model, num_workers=1)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')
@@ -391,8 +507,8 @@ if __name__ == "__main__":
 
     print("steps_per_epoch", steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 6e-4 # 0.0006 # 1e-4
-    min_lr = max_lr * 0.1 # 0.00006
+    max_lr = 5e-3 # 0.0006 # 1e-4
+    min_lr = 1e-4 # 0.00006
     warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
 
     # Cosine decay with linear warmup learning rate schedule
@@ -411,23 +527,23 @@ if __name__ == "__main__":
     # Optimizer
     # Create AdamW optimizer and use the fused version if it is available - when running on CUDA
     # Instead of iterating over all the tensors and updating them which would launch many kernels, Fused would fuse all these kernels 
-    # fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-    # use_fused = fused_available and 'cuda' in device
-    optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=max_lr, device=device) # AdamW optimizer
+    fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    use_fused = fused_available and 'cuda' in device
+    optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
     # Tell PyTorch to print the full tensor
-    torch.set_printoptions(threshold=torch.inf)
     torch.autograd.set_detect_anomaly(True)
 
-    # Best validation loss
-    best_val_loss = math.inf 
+    # Best Validation EER's
+    best_cosine_eer = math.inf
+    best_maha_eer = math.inf
 
     start_epoch_count = 0
     step_count = 0
 
-    # To store validation losses list, for plotting 
-    val_losses = []
-    train_losses = []
+    # To store validation eers list, for plotting 
+    val_eers = []
+
     # Loading the model from checkpoint if training is being continued
     mode = {'type': "SCRATCH", 'checkpoint_file': ""}
     if mode['type'] == "RESUME":
@@ -439,8 +555,9 @@ if __name__ == "__main__":
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch_count = checkpoint['epoch'] + 1
         step_count = checkpoint['step_count']
-        val_losses = checkpoint['val_losses']
-        best_val_loss = checkpoint['loss']
+        val_eers = checkpoint['val_eers']
+        best_cosine_eer = checkpoint['best_cosine_eer']
+        best_maha_eer = checkpoint['best_maha_eer']
         max_lr = checkpoint['max_lr']
         min_lr = checkpoint['min_lr']
 
@@ -462,10 +579,11 @@ if __name__ == "__main__":
             temporal_attention_mask = temporal_attention_mask.to(device)
             channel_attention_mask = channel_attention_mask.to(device)
 
-            emb, logits, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, channel_attn_mask=channel_attention_mask, targets=labels)
+            emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, temporal_attn_mask= temporal_attention_mask, 
+                                                                    channel_attn_mask=channel_attention_mask, targets=labels)
 
             # Backprop
-            loss.backward()
+            cos_loss.backward()
 
             # Clipping the global norm of the gradient
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -479,33 +597,30 @@ if __name__ == "__main__":
 
             torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
 
-            print(f"step {step_count} | lr: {lr} | loss: {loss} | norm: {norm:.4f}")
+            print(f"step {step_count} | lr: {lr} | cos_loss: {cos_loss} | norm: {norm:.4f}")
             print("--")
 
             step_count += 1
 
-        # After every epoch - Validate
-        val_metrics = validate(val_dataloader=val_dataloader)
-        val_loss = val_metrics['loss']
-        val_losses.append(val_loss)
-        overall_train_loss = estimate_train_loss(training_dataloader)
-        train_losses.append(overall_train_loss)
-        print(f"Validation Loss: {val_loss}, Train Loss: {overall_train_loss}")
-        print(val_metrics)
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        if epoch % 5 == 0 and epoch != 0:
+            # After every epoch - Validate
+            avg_cosine_eer, avg_mahalanobis_eer, avg_exact_cosine_eer, avg_exact_mahalanobis_eer = validate(val_dataset=val_dataset, num_of_enrollment_sessions=4, num_of_verify_sessions=4, device=device, batch_size=32)
+            val_eers.append((avg_cosine_eer, avg_mahalanobis_eer, avg_exact_cosine_eer, avg_exact_mahalanobis_eer))
+            # Relying on mahalonobis eer
+            # if avg_mahalanobis_eer < best_maha_eer:
             checkpoint = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
-                'loss': val_loss,
-                'val_metrics': val_metrics,
+                'best_cosine_eer': avg_cosine_eer,
+                'best_maha_eer': avg_mahalanobis_eer,
+                'best_exact_cosine_eer': avg_exact_cosine_eer,
+                'best_exact_maha_eer': avg_exact_mahalanobis_eer,
                 'config': model_config,
                 'step_count': step_count,
                 'max_lr': max_lr,
                 'min_lr': min_lr,
-                'val_losses': val_losses,
-                'train_losses': train_losses,
+                'val_eers': val_eers,
                 'means_for_normalization': means_for_normalization,
                 'stds_for_normalization': stds_for_normalization,
                 'same_user_ratio_in_batch': same_user_ratio_in_batch,
@@ -513,30 +628,31 @@ if __name__ == "__main__":
                 'screen_dim_y': screen_dim_y
 
             }
-            torch.save(checkpoint, f"./checkpoints/best_val_epoch{epoch}_seq_len{model_config.seq_len}_run1.pt")
+            torch.save(checkpoint, f"./checkpoints/best_val_epoch{epoch}_seq_len{model_config.seq_len}_run3.pt")
         
-         # Checking for early stop
-        early_stopper(val_loss)
-        if early_stopper.early_stop:
-            break
+            # Checking for early stop
+            early_stopper(avg_mahalanobis_eer)
+            if early_stopper.early_stop:
+                break
     
-    torch.save({'train_losses': train_losses,
+    torch.save({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
-                'loss': val_loss,
-                'val_metrics': val_metrics,
+                'best_cosine_eer': best_cosine_eer,
+                'best_maha_eer': best_maha_eer,
+                'val_eers': val_eers,
                 'config': model_config,
                 'step_count': step_count,
                 'max_lr': max_lr,
                 'min_lr': min_lr,
-                'val_losses': val_losses,
+                'val_eers': val_eers,
                 'means_for_normalization': means_for_normalization,
                 'stds_for_normalization': stds_for_normalization,
                 'same_user_ratio_in_batch': same_user_ratio_in_batch,
                 'screen_dim_x': screen_dim_x,
                 'screen_dim_y': screen_dim_y}, 
-               f"./checkpoints/final_run1.pt")
+               f"./checkpoints/final_run3.pt")
 
         
     
