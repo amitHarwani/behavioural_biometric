@@ -98,11 +98,9 @@ def merge_sequences(data, merge_length):
             session_data = []
             # Flatten the session into a single array of shape (N*10, 62)
             flat_session = np.concatenate(session, axis=0)
-            print("Flat Session shape", flat_session.shape)
             # Split into chunks of merge_length
             for i in range(0, len(flat_session), merge_length):
                 if i + merge_length <= len(flat_session):
-                    print("Adding from ",i, "to", i+merge_length)
                     session_data.append(flat_session[i:i + merge_length])
             if i < len(flat_session):
                 session_data.append(flat_session[i:])
@@ -148,10 +146,6 @@ def compute_exact_eer(y_true, y_score, pos_label=1):
     eer_threshold = float(thresh_interp(eer))
 
     return eer, eer_threshold
-
-# Example usage:
-# eer_value, thresh = compute_exact_eer(y_true, y_scores)
-# print(f"EER = {eer_value:.4f} ({eer_value*100:.2f}%), at threshold = {thresh:.4f}")
 
 @torch.no_grad()
 def validate(val_dataset, num_of_enrollment_sessions, num_of_verify_sessions, device, batch_size=32):
