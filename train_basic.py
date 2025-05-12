@@ -141,7 +141,7 @@ if __name__ == "__main__":
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
     batch_size = 16 # Batch size
-    actual_batch_size = 64
+    actual_batch_size = 128
     accum_steps = actual_batch_size // batch_size
     n_epochs = 10 # Number of epochs
     overlap_len = 100
@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
     # Data Loaders | Training dataloader uses a Contrastive Sampler
     training_dataloader = get_training_dataloader(train_sequences=train_sequences, train_user_ids=train_user_ids, train_user_to_indices=train_user_to_indices, 
-                                                  batch_size=batch_size, sequence_length=model_config.seq_len, num_workers=0)
+                                                  n_classes_per_batch=4, n_samples_per_class=4, sequence_length=model_config.seq_len, num_workers=0)
     
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
@@ -275,7 +275,7 @@ if __name__ == "__main__":
             print("Batch-Step", batch_step)
             sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
             labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
-            modality_mask = batch['modality_mask'].to(device) # (B,T, 3)
+            modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
 
             emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, modality_mask=modality_mask, targets=labels)
 
@@ -325,7 +325,7 @@ if __name__ == "__main__":
             'screen_dim_y': screen_dim_y
 
         }
-        torch.save(checkpoint, f"./checkpoints/v1_test_run1_{epoch}.pt")
+        torch.save(checkpoint, f"./checkpoints/v1_test_run2_{epoch}.pt")
     
 
         

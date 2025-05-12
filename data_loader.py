@@ -185,6 +185,48 @@ class PairLevelNumpyContrastiveSampler(BatchSampler):
     def __len__(self):
         return math.ceil(self.total_indices / self.batch_size)
 
+class ClassBalancedBatchSampler(BatchSampler):
+
+    def __init__(self,
+                 dataset: TrainingDataset,
+                 n_classes: int,
+                 samples_per_class: int):
+        
+        self.user_to_indices = dataset.user_to_indices
+        self.users = list(self.user_to_indices.keys())
+        self.n_classes = n_classes
+        self.samples_per_class = samples_per_class
+        self.batch_size = n_classes * samples_per_class
+
+    def __iter__(self):
+        # Compute how many batches per epoch
+        # We’ll define an “epoch” as consuming each user approximately equally:
+        # total_samples = sum(len(idxs) for idxs in self.user_to_indices.values())
+        # num_batches = total_samples // batch_size
+        total_samples = sum(len(idxs) for idxs in self.user_to_indices.values())
+        num_batches = total_samples // self.batch_size
+
+        for _ in range(num_batches):
+            # 1) sample C distinct users
+            selected_users = random.sample(self.users, self.n_classes)
+
+            batch = []
+            # 2) for each user, sample K indices
+            for u in selected_users:
+                idxs = self.user_to_indices[u] # Users' sequence indices
+                if len(idxs) >= self.samples_per_class:
+                    chosen = random.sample(idxs, self.samples_per_class)
+                else:
+                    # with-replacement if user has fewer than K samples
+                    chosen = random.choices(idxs, k=self.samples_per_class)
+                batch.extend(chosen)
+
+            yield batch
+
+    def __len__(self):
+        total_samples = sum(len(idxs) for idxs in self.user_to_indices.values())
+        return total_samples // self.batch_size
+
 
 def collate_fn(batch, max_sequence_len):
     """Collate function to handle variable-length sequences."""
@@ -209,9 +251,9 @@ def collate_fn(batch, max_sequence_len):
     }
 
 
-def get_training_dataloader(train_sequences, train_user_ids, train_user_to_indices, batch_size=64, sequence_length=200, num_workers=4) -> DataLoader:
+def get_training_dataloader(train_sequences, train_user_ids, train_user_to_indices, n_classes_per_batch, n_samples_per_class, sequence_length=200, num_workers=4) -> DataLoader:
     dataset = TrainingDataset(train_sequences, train_user_ids, train_user_to_indices,)
-    sampler = PairLevelNumpyContrastiveSampler(dataset, batch_size)
+    sampler = ClassBalancedBatchSampler(dataset=dataset, n_classes=n_classes_per_batch, samples_per_class=n_samples_per_class)
     
     # Using partial to fix the max_sequence_length
     collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length)

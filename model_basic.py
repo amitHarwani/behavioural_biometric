@@ -102,6 +102,8 @@ class Model(nn.Module):
         # Linear layer for converting raw feature dimension to required feature dimension
         self.linear_proj_1 = nn.Linear(config.raw_d_model, config.d_model)
 
+        self.ln = nn.LayerNorm(config.d_model)
+
         # Modality projection
         self.modality_proj = nn.Linear(config.n_modalities, config.d_model)
 
@@ -170,6 +172,7 @@ class Model(nn.Module):
         # Linear project to d_model
         inputs = self.linear_proj_1(inputs) # (B, seq_len, d_model)
         modality_embed = self.modality_proj(modality_mask.float()) # (B, seq_len, n_modalities) @ (n_modalities, d_model) => (B, seq_len, d_model)
+        inputs = self.ln(inputs)
         inputs = inputs + modality_embed # Adding the modality embedding to the inputs
 
         cls_tokens = self.cls_token.expand(inputs.shape[0], -1, -1) # Expand CLS token to (B, 1, d_model)
