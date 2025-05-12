@@ -1,8 +1,8 @@
 /datasets
 .vscode/
-test_users_*
-training_users_*
-validation_users_*
+*test_users_*
+*training_users_*
+*validation_users_*
 /__pycache__
 /checkpoints
 RUN_NOTES.md
