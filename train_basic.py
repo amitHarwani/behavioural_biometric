@@ -287,7 +287,7 @@ if __name__ == "__main__":
             # Once the desired batch size is reached
             if (batch_step + 1) % accum_steps == 0:
                 # Clipping the global norm of the gradient
-                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
                 # Updating the weights
                 # determine and set the learning rate for this iteration
@@ -325,7 +325,7 @@ if __name__ == "__main__":
             'screen_dim_y': screen_dim_y
 
         }
-        torch.save(checkpoint, f"./checkpoints/v1_test_run2_{epoch}.pt")
+        torch.save(checkpoint, f"./checkpoints/v1_test_run4_{epoch}.pt")
     
 
         

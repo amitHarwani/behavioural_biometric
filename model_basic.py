@@ -47,10 +47,12 @@ class TransformerEncoderLayer(nn.Module):
         # Temporal and channel attention's concatenated + src for residual connection, Layer Norm applied before attention
         # B x seq_len x d_model - src
         # After attention and attention norm - B x seq_len x d_model
-        src_normalized = self.ln_1(src)
+        # src_normalized = self.ln_1(src)
 
-        src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized)[0]
-        src = src + self.mlp(self.ln_2(src))
+        src = src + self.temporal_attention(src, src, src)[0]
+        src = self.ln_1(src)
+        src = src + self.mlp(src)
+        src = self.ln_2(src)
         
         return src
 
@@ -172,8 +174,8 @@ class Model(nn.Module):
         # Linear project to d_model
         inputs = self.linear_proj_1(inputs) # (B, seq_len, d_model)
         modality_embed = self.modality_proj(modality_mask.float()) # (B, seq_len, n_modalities) @ (n_modalities, d_model) => (B, seq_len, d_model)
-        inputs = self.ln(inputs)
         inputs = inputs + modality_embed # Adding the modality embedding to the inputs
+        inputs = self.ln(inputs)
 
         cls_tokens = self.cls_token.expand(inputs.shape[0], -1, -1) # Expand CLS token to (B, 1, d_model)
         inputs = torch.cat([cls_tokens, inputs], dim=1) # Appending the CLS token to the input sequence (B, seq_len + 1, d_model)
