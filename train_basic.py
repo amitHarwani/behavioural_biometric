@@ -214,26 +214,28 @@ if __name__ == "__main__":
     model.to(device)
 
     steps_per_epoch = len(training_dataloader) # Number of steps in an epoch OR number of batches
-    total_steps_to_train = steps_per_epoch * n_epochs # Total number of steps to train the model
+    optimizer_steps_per_epoch = steps_per_epoch // accum_steps
+    total_steps_to_train = optimizer_steps_per_epoch * n_epochs # Total number of steps to train the model
 
-    print("steps_per_epoch", steps_per_epoch, "total_steps_to_train", total_steps_to_train)
+    print("steps_per_epoch", steps_per_epoch, "optimizer_steps_per_epoch", optimizer_steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 6e-4 # 0.0006 # 1e-4
+    max_lr = 1e-3 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
-    warmup_steps = int(total_steps_to_train * 0.1) # 10% of total steps
+    warmup_steps = optimizer_steps_per_epoch * 2 # 10% of total steps
 
     # Cosine decay with linear warmup learning rate schedule
     def get_lr(iteration):
         # Linear warmup
         if iteration < warmup_steps:
             return max_lr * ((iteration + 1) / warmup_steps)
-        if iteration >= total_steps_to_train:
-            return min_lr
-        # Cosine decay
-        decay_ratio = (iteration - warmup_steps) / (total_steps_to_train - warmup_steps) # Between 0 and 1
-        assert 0<=decay_ratio<=1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff  starts at 1 and goes to 0
-        return min_lr + coeff * (max_lr - min_lr) 
+        return max_lr
+        # if iteration >= total_steps_to_train:
+        #     return min_lr
+        # # Cosine decay
+        # decay_ratio = (iteration - warmup_steps) / (total_steps_to_train - warmup_steps) # Between 0 and 1
+        # assert 0<=decay_ratio<=1
+        # coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff  starts at 1 and goes to 0
+        # return min_lr + coeff * (max_lr - min_lr) 
     
     # Optimizer
     # Create AdamW optimizer and use the fused version if it is available - when running on CUDA
@@ -254,17 +256,18 @@ if __name__ == "__main__":
     # Loading the model from checkpoint if training is being continued
     mode = {'type': "SCRATCH", 'checkpoint_file': ""}
     if mode['type'] == "RESUME":
-        checkpoint = torch.load(mode['checkpoint_file'], weights_only=False)
+        checkpoint = torch.load(mode['checkpoint_file'], map_location=device, weights_only=False)
         model_config = checkpoint['config']
         model = Model(model_config)
-        model.to(device)
         model.load_state_dict(checkpoint['model'])
+        model.to(device)
+        max_lr = checkpoint['max_lr']
+        min_lr = checkpoint['min_lr']
+        optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_epoch_count = checkpoint['epoch'] + 1
         step_count = checkpoint['step_count']
         val_eers = checkpoint['val_eers']
-        max_lr = checkpoint['max_lr']
-        min_lr = checkpoint['min_lr']
 
     # Early stopper
     early_stopper = EarlyStopping(patience=5, min_delta=0.001)
@@ -287,7 +290,7 @@ if __name__ == "__main__":
             # Once the desired batch size is reached
             if (batch_step + 1) % accum_steps == 0:
                 # Clipping the global norm of the gradient
-                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                # norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
                 # Updating the weights
                 # determine and set the learning rate for this iteration
@@ -300,7 +303,7 @@ if __name__ == "__main__":
 
                 torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
 
-                print(f"step {step_count} | lr: {lr} | cos_loss: {loss_accum.item():.6f} | norm: {norm:.4f}")
+                print(f"step {step_count} | lr: {lr} | cos_loss: {loss_accum.item():.6f} |")
                 print("--")
                 loss_accum = 0.0
                 step_count += 1
@@ -325,7 +328,7 @@ if __name__ == "__main__":
             'screen_dim_y': screen_dim_y
 
         }
-        torch.save(checkpoint, f"./checkpoints/v1_test_run4_{epoch}.pt")
+        torch.save(checkpoint, f"./checkpoints/v1_test_run6_{epoch}.pt")
     
 
         
