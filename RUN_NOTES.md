@@ -1,9 +1,24 @@
-200x46 | Supervised Contrastive Loss
-Train sequences 358149 Val sequences 3305
+
+50 Keystrokes - A G M - 
+
+45 + 5
+45 + 5
+
+
+
+10ms sequences - If keystroke is not present zeroed out
+
+200 sequences combined to form a 2 second sequence.
+200x46 
+Supervised Contrastive Loss
+
+Train sequences 358149 (79 users) Val sequences 3305 (10 users)
+
+200,000 Parameters
 # Run 1
 steps_per_epoch 22387 total_steps_to_train 223870
 NOTE: LR Bug max | 6e-4, min 6e-5, warmup: 10%
-
+Each class in batch has 2 samples Batch 128
 Val EER: 
 Epoch 0: 28.7541 | 27.7799
 Epoch 1: 29.5205 | 24.2686
@@ -16,9 +31,11 @@ Epoch 7: 25.1000 | 24.5251
 Epoch 8: 28.8910 | 24.3952
 Epoch 9: 28.7267 | 21.3920
 
+Observation - Poor separation , Better performance of Mahalonobis
 
 # Run 2
-Changed to Class Balanced Batch Sampler with K classes and C samples per class.
+Changed to Class Balanced Batch Sampler with K classes and C samples per class. 
+4 classes 4 samples
 Add Layer Norm before modality_proj
 Change actual_batch_size to 128
 NOTE: LR Bug | max: 6e-4, min 6e-5, warmup: 10%
@@ -35,8 +52,11 @@ Epoch 7: 22.8936 | 16.6188
 Epoch 8: 26.6163 | 18.7738
 Epoch 9: 26.1382 | 20.0503
 
+Observation - Improvement because of the new sampler, Better Performance of Mahalonobis, Still Noisy
+
 # Run 3 - Post Layer Norm and gradient clip of 1.0
 NOTE: LR Bug | max: 6e-4, min 6e-5, warmup: 10%
+4 classes 4 samples - (128 Actual Batch Size)
 Val EER: 
 Epoch 0: 30.2621 | 27.7691
 Epoch 1: 24.6340 | 22.1556
@@ -48,9 +68,14 @@ Epoch 5: 19.2823 | 13.6250
 Epoch 7: 22.7152 | 15.0961
 Epoch 8: 20.8079 | 16.0207
 Epoch 9: 22.9683 | 16.1532
+
+Observation - Post layer norm makes it more smooth, Found LR Bug
+
+
  -- Solved LR Bug After This
 
 # Run 4 - max: 1e-4, min 1e-5 | 10 epochs (Warmup 10%)
+4 classes 4 samples - (128 Actual Batch Size)
 Val EER: 
 Epoch 0: 24.836667586191233 | 23.851515265366952
 Epoch 1: 23.02210722116805  | 21.224587470362195
@@ -63,7 +88,11 @@ Epoch 7: 20.5719903359796   | 16.715986762590777
 Epoch 8: 19.942691197502374 | 16.943626624170516
 Epoch 9: 19.791206491307864 | 17.057708262843242
 
+Observation: Set LR to 1e-4 to achieve same performance as run 3 but with the LR bug fices, However the eer does not improve after epoch 7
+Maybe the learning rate drop is too much
+
 # Run 5 - Linear warmup to 1e-4 (20% - 2 epochs), and stay there
+4 classes 4 samples - (128 Actual Batch Size)
 Val EER: 
 Epoch 0: 31.1945 | 27.0056
 Epoch 1: 21.8721 | 21.8855
@@ -86,7 +115,11 @@ Epoch 17: 19.1866 | 15.0476
 Epoch 18: 19.1552 | 14.4487
 **Epoch 19: 17.7967 | 13.3554**
 
-# Run 6 - Linear warmup to 1e-3 (20% - epochs), and stay there - No gradient clipping: 
+Observation: Setting learning rate to a constant of 1e-4 after warmup of 20%/2epochs, makes it smooth with slight bumps, But it takes
+20 epochs to get to 13% eer
+
+# Run 6 - Linear warmup to 1e-3 (20% - 2 epochs), and stay there - No gradient clipping: 
+4 classes 4 samples - (128 Actual Batch Size)
 Epoch 0: 23.7832 | 20.6077
 Epoch 1: 21.2346 | 16.9010
 Epoch 2: 20.7503 | 15.5836
@@ -96,6 +129,32 @@ Epoch 5: 24.0379 | 18.6179
 Epoch 6: 25.3768 | 17.6301
 Epoch 7: 23.3631 | 18.8113
 
+Observation: Since the previous run took a long time, Setting the warmup to 1e-3 and then staying there with no gradient clipping - Helps achieve
+the previous highest performance of 12%
+
+
+-----------------------------------------------
+
+Cross Entropy Loss: train_1.py
+
+- train_1.pt: 
+
+    - Training on 10 user dataset (v1_merged_test_users_data) [Cross Entropy Loss] 
+        - Divided it also to train and test sequences with 20% test sequences.
+    - Tested on 10 users (v1_merged_validation_users_data)   
+        - 50 Squences Per Session: 50% for enrollment and 50% for verify: Mahaloobis EER: 10.02%
+        - All Sequences: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.74%
+
+- train_1_1.pt
+    - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss]
+        - Divided it also to train and test sequences with 20% test sequences.
+    - Tested on 10 users (v1_merged_validation_users_data) 
+        - During Training: 50 Seq per session: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.73%
+        - All Sequences: 50% for enrollment and 50% for verify:  **5.4212**
+    - Tested on 10 users (v1_merged_test_users_data)
+        -  All Sequences: 50% for enrollment and 50% for verify: **5.1212%**
+
+
 
 # Run - Temperature: 0.05 and maybe higher
 # Run - 128 embedding 
@@ -103,4 +162,101 @@ Epoch 7: 23.3631 | 18.8113
 # Run - More Layers, More Heads
 # Run - Channel Attention
 # Run - CNN 
+
+
+
+
+
+-----------------------------
+[Test Dataset Stats]
+User: 0: Num. of sessions: 8
+         Session: 0: Number of Sequences: 309
+         Session: 1: Number of Sequences: 292
+         Session: 2: Number of Sequences: 311
+         Session: 3: Number of Sequences: 386
+         Session: 4: Number of Sequences: 356
+         Session: 5: Number of Sequences: 348
+         Session: 6: Number of Sequences: 571
+         Session: 7: Number of Sequences: 482
+User: 1: Num. of sessions: 8
+         Session: 0: Number of Sequences: 702
+         Session: 1: Number of Sequences: 649
+         Session: 2: Number of Sequences: 708
+         Session: 3: Number of Sequences: 685
+         Session: 4: Number of Sequences: 875
+         Session: 5: Number of Sequences: 760
+         Session: 6: Number of Sequences: 659
+         Session: 7: Number of Sequences: 635
+User: 2: Num. of sessions: 8
+         Session: 0: Number of Sequences: 8
+         Session: 1: Number of Sequences: 5
+         Session: 2: Number of Sequences: 0
+         Session: 3: Number of Sequences: 4
+         Session: 4: Number of Sequences: 44
+         Session: 5: Number of Sequences: 10
+         Session: 6: Number of Sequences: 7
+         Session: 7: Number of Sequences: 3
+User: 3: Num. of sessions: 8
+         Session: 0: Number of Sequences: 522
+         Session: 1: Number of Sequences: 431
+         Session: 2: Number of Sequences: 457
+         Session: 3: Number of Sequences: 397
+         Session: 4: Number of Sequences: 427
+         Session: 5: Number of Sequences: 485
+         Session: 6: Number of Sequences: 446
+         Session: 7: Number of Sequences: 453
+User: 4: Num. of sessions: 8
+         Session: 0: Number of Sequences: 1244
+         Session: 1: Number of Sequences: 948
+         Session: 2: Number of Sequences: 829
+         Session: 3: Number of Sequences: 720
+         Session: 4: Number of Sequences: 768
+         Session: 5: Number of Sequences: 809
+         Session: 6: Number of Sequences: 821
+         Session: 7: Number of Sequences: 693
+User: 5: Num. of sessions: 8
+         Session: 0: Number of Sequences: 547
+         Session: 1: Number of Sequences: 465
+         Session: 2: Number of Sequences: 523
+         Session: 3: Number of Sequences: 422
+         Session: 4: Number of Sequences: 400
+         Session: 5: Number of Sequences: 572
+         Session: 6: Number of Sequences: 489
+         Session: 7: Number of Sequences: 429
+User: 6: Num. of sessions: 8
+         Session: 0: Number of Sequences: 545
+         Session: 1: Number of Sequences: 122
+         Session: 2: Number of Sequences: 318
+         Session: 3: Number of Sequences: 336
+         Session: 4: Number of Sequences: 281
+         Session: 5: Number of Sequences: 358
+         Session: 6: Number of Sequences: 404
+         Session: 7: Number of Sequences: 404
+User: 7: Num. of sessions: 8
+         Session: 0: Number of Sequences: 419
+         Session: 1: Number of Sequences: 459
+         Session: 2: Number of Sequences: 398
+         Session: 3: Number of Sequences: 326
+         Session: 4: Number of Sequences: 334
+         Session: 5: Number of Sequences: 376
+         Session: 6: Number of Sequences: 463
+         Session: 7: Number of Sequences: 358
+User: 8: Num. of sessions: 8
+         Session: 0: Number of Sequences: 480
+         Session: 1: Number of Sequences: 502
+         Session: 2: Number of Sequences: 589
+         Session: 3: Number of Sequences: 385
+         Session: 4: Number of Sequences: 552
+         Session: 5: Number of Sequences: 292
+         Session: 6: Number of Sequences: 472
+         Session: 7: Number of Sequences: 520
+User: 9: Num. of sessions: 8
+         Session: 0: Number of Sequences: 627
+         Session: 1: Number of Sequences: 431
+         Session: 2: Number of Sequences: 462
+         Session: 3: Number of Sequences: 538
+         Session: 4: Number of Sequences: 453
+         Session: 5: Number of Sequences: 378
+         Session: 6: Number of Sequences: 498
+         Session: 7: Number of Sequences: 448
 

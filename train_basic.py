@@ -20,7 +20,7 @@ from scipy.interpolate import interp1d
 
 from model_basic import ModelConfig, Model
 from data_loader import get_training_dataloader
-from validation import validate
+from validation import validate, estimate_train_loss
 
 # import sys
 
@@ -134,14 +134,17 @@ if __name__ == "__main__":
         d_model= 64, # Num. of features
         seq_len= 200, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
-        n_layers= 5, # Number of layers or transformer encoders
-        n_users = 79, # Number of users (For classification)
+        dropout=0,
+        n_layers= 1, # Number of layers or transformer encoders
+        n_users = 10, # Number of users (For classification)
         contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
-    batch_size = 16 # Batch size
-    actual_batch_size = 128
+    n_classes_per_batch = 2
+    n_samples_per_class = 4
+    batch_size = n_classes_per_batch * n_samples_per_class # Batch size
+    actual_batch_size = 8
     accum_steps = actual_batch_size // batch_size
     n_epochs = 10 # Number of epochs
     overlap_len = 100
@@ -180,7 +183,6 @@ if __name__ == "__main__":
             pickle.dump(train_dataset, outfile)
         with open(val_dataset_merged_file, "wb") as outfile:
             pickle.dump(val_dataset, outfile)
-        
 
     print("Starting Normalization")
     # Normalizing the datasets
@@ -200,7 +202,7 @@ if __name__ == "__main__":
 
     # Data Loaders | Training dataloader uses a Contrastive Sampler
     training_dataloader = get_training_dataloader(train_sequences=train_sequences, train_user_ids=train_user_ids, train_user_to_indices=train_user_to_indices, 
-                                                  n_classes_per_batch=4, n_samples_per_class=4, sequence_length=model_config.seq_len, num_workers=0)
+                                                  n_classes_per_batch=n_classes_per_batch, n_samples_per_class=n_samples_per_class, sequence_length=model_config.seq_len, num_workers=0)
     
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
@@ -219,7 +221,7 @@ if __name__ == "__main__":
 
     print("steps_per_epoch", steps_per_epoch, "optimizer_steps_per_epoch", optimizer_steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 1e-3 # 0.0006 # 1e-4
+    max_lr = 6e-4 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
     warmup_steps = optimizer_steps_per_epoch * 2 # 10% of total steps
 
@@ -252,6 +254,7 @@ if __name__ == "__main__":
 
     # To store validation eers list, for plotting 
     val_eers = []
+    train_losses = []
 
     # Loading the model from checkpoint if training is being continued
     mode = {'type': "SCRATCH", 'checkpoint_file': ""}
@@ -268,6 +271,7 @@ if __name__ == "__main__":
         start_epoch_count = checkpoint['epoch'] + 1
         step_count = checkpoint['step_count']
         val_eers = checkpoint['val_eers']
+        train_losses = checkpoint['train_losses']
 
     # Early stopper
     early_stopper = EarlyStopping(patience=5, min_delta=0.001)
@@ -283,14 +287,15 @@ if __name__ == "__main__":
             emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, modality_mask=modality_mask, targets=labels)
 
             cos_loss = cos_loss / accum_steps
-            loss_accum += cos_loss.detach()
             # Backprop
             cos_loss.backward()
+            
+            loss_accum += cos_loss.detach()
 
             # Once the desired batch size is reached
             if (batch_step + 1) % accum_steps == 0:
                 # Clipping the global norm of the gradient
-                # norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
                 # Updating the weights
                 # determine and set the learning rate for this iteration
@@ -301,18 +306,20 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad() # Zeroing the gradients
 
-                torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
+                # torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
 
-                print(f"step {step_count} | lr: {lr} | cos_loss: {loss_accum.item():.6f} |")
+                print(f"step {step_count} | lr: {lr} | cos_loss: {loss_accum.item():.6f} | norm: {norm:.4f}")
                 print("--")
                 loss_accum = 0.0
                 step_count += 1
 
         # After every epoch - Validate
         avg_cos_eer, avg_maha_eer = validate(model=model, val_sequences=val_sequences, val_user_ids=val_user_ids, val_user_to_indices=val_user_to_indices,
-                                             device=device, batch_size=16)
-        print(f"Validation Result -------- avg_cos_eer: {avg_cos_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f}")
+                                             device=device, batch_size=64)
+        avg_train_loss = estimate_train_loss(model=model, train_dataloader=training_dataloader, device=device)
+        print(f"Validation Result -------- avg_cos_eer: {avg_cos_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | train_loss: {avg_train_loss:.4f}")
         val_eers.append((avg_cos_eer, avg_maha_eer))
+        train_losses.append(avg_train_loss)
         checkpoint = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
@@ -324,11 +331,12 @@ if __name__ == "__main__":
             'max_lr': max_lr,
             'min_lr': min_lr,
             'val_eers': val_eers,
+            'train_losses': train_losses,
             'screen_dim_x': screen_dim_x,
             'screen_dim_y': screen_dim_y
 
         }
-        torch.save(checkpoint, f"./checkpoints/v1_test_run6_{epoch}.pt")
+        torch.save(checkpoint, f"./checkpoints/v1_test_run7_{epoch}.pt")
     
 
         

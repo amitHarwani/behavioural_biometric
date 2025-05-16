@@ -103,3 +103,19 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
 
     model.train()
     return np.mean(cos_eers), np.mean(mah_eers)
+
+@torch.no_grad()
+def estimate_train_loss(model: Model, train_dataloader, device):
+    model.eval()
+
+    loss_list = []
+    for batch in train_dataloader:
+        seqs = batch['sequences'].to(device)
+        mm = batch['modality_mask'].to(device)
+        user_ids = batch['user_ids'].to(device)
+        emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=seqs, modality_mask=mm, targets=user_ids)# (B, d_model)
+        loss_list.append(cos_loss.detach().cpu())
+
+    model.train()
+
+    return torch.mean(torch.stack(loss_list), dim=0).item()

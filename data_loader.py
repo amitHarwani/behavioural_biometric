@@ -280,6 +280,7 @@ def get_validation_dataloader(val_sequences, val_user_ids, batch_size=64, sequen
         batch_size=batch_size,
         num_workers=num_workers,
         collate_fn=collate_fn_initialized,
+        shuffle=True
     )
 
     return dataloader

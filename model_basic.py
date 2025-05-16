@@ -12,6 +12,7 @@ class ModelConfig:
     seq_len: int = 200 # Sequence length
     n_temporal_heads: int = 4 # Num. of temporal heads
     n_layers: int = 5 # Number of Layers
+    dropout: float = 0.1
     n_users: int = 79 # Number of users to classify
     contrastive_loss_alpha: int = 2 # Contrastive loss importance - hyperparameter (Alpha)
 
@@ -25,11 +26,13 @@ class MLP(nn.Module):
         self.gelu = nn.GELU(approximate='tanh')
         self.c_proj = nn.Linear(4 * config.d_model, config.d_model) # Linear projection
         self.c_proj.SCALE_RES_INIT = 1
+        self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
         x = self.c_fc(x)
         x = self.gelu(x)
         x = self.c_proj(x)
+        x = self.dropout(x)
         return x
     
 # Single Encoder Block/Layer
@@ -38,7 +41,7 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         
         self.ln_1 = nn.LayerNorm(config.d_model)        
-        self.temporal_attention = nn.MultiheadAttention(config.d_model, config.n_temporal_heads, batch_first=True) 
+        self.temporal_attention = nn.MultiheadAttention(config.d_model, config.n_temporal_heads, batch_first=True, dropout=config.dropout) 
 
         self.ln_2 = nn.LayerNorm(config.d_model)
         self.mlp = MLP(config)
@@ -47,12 +50,12 @@ class TransformerEncoderLayer(nn.Module):
         # Temporal and channel attention's concatenated + src for residual connection, Layer Norm applied before attention
         # B x seq_len x d_model - src
         # After attention and attention norm - B x seq_len x d_model
-        # src_normalized = self.ln_1(src)
+        src_normalized = self.ln_1(src)
 
-        src = src + self.temporal_attention(src, src, src)[0]
-        src = self.ln_1(src)
-        src = src + self.mlp(src)
-        src = self.ln_2(src)
+        src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized)[0]
+        # src = self.ln_1(src)
+        src = src + self.mlp(self.ln_2(src))
+        # src = self.ln_2(src)
         
         return src
 
@@ -83,7 +86,7 @@ class Transformer(nn.Module):
         super().__init__()
 
         # Normal pos. emb, +1 for CLS token
-        self.pos_encoding = nn.Parameter(torch.randn(1, config.seq_len + 1, config.d_model)) # (1, seq_len + 1, d_model)
+        self.pos_encoding = nn.Parameter(torch.randn(1, config.seq_len, config.d_model)) # (1, seq_len + 1, d_model)
 
         self.encoder = TransformerEncoder(config) # B, seq_len, d_model
 
@@ -101,6 +104,8 @@ class Model(nn.Module):
         
         self.config = config
 
+        self.input_norm = nn.LayerNorm(config.raw_d_model)
+
         # Linear layer for converting raw feature dimension to required feature dimension
         self.linear_proj_1 = nn.Linear(config.raw_d_model, config.d_model)
 
@@ -109,12 +114,17 @@ class Model(nn.Module):
         # Modality projection
         self.modality_proj = nn.Linear(config.n_modalities, config.d_model)
 
-        # Learnable CLS token for output embedding
-        self.cls_token = nn.Parameter(torch.randn(1,1,config.d_model)) # (1, 1, d_model)
-
         # Output of the below is = B x seq_len x d_model
         self.transformer = Transformer(config)
         
+        self.final_proj = nn.Sequential(
+            nn.Linear(config.seq_len * config.d_model, (config.seq_len * config.d_model) // 2),
+            nn.ReLU(),
+            nn.Dropout(config.dropout),
+            nn.Linear((config.seq_len * config.d_model) // 2, config.d_model),
+            nn.ReLU()
+        )
+
         self.classifier = nn.Linear(config.d_model, config.n_users, bias=False) # Final Classification layer
         self.apply(self._init_weights)
 
@@ -171,19 +181,17 @@ class Model(nn.Module):
         # Input: (B, seq_len,  raw_d_model)
         # Modality Mask: (B, seq_len, n_modalities)
 
+        inputs = self.input_norm(inputs)
+
         # Linear project to d_model
         inputs = self.linear_proj_1(inputs) # (B, seq_len, d_model)
         modality_embed = self.modality_proj(modality_mask.float()) # (B, seq_len, n_modalities) @ (n_modalities, d_model) => (B, seq_len, d_model)
         inputs = inputs + modality_embed # Adding the modality embedding to the inputs
         inputs = self.ln(inputs)
 
-        cls_tokens = self.cls_token.expand(inputs.shape[0], -1, -1) # Expand CLS token to (B, 1, d_model)
-        inputs = torch.cat([cls_tokens, inputs], dim=1) # Appending the CLS token to the input sequence (B, seq_len + 1, d_model)
-
         # Pass to the transformer
-        out = self.transformer(inputs) # (B, seq_len + 1, d_model)
-
-        out = out[:, 0, :] # (B, d_model) - CLS token output
+        out = self.transformer(inputs) # (B, seq_len, d_model)
+        out = self.final_proj(torch.flatten(out, start_dim=1, end_dim=2))
         
         # print(f"After Linear Projection mean: {out.mean()} | std: {out.std()}")
 
@@ -199,53 +207,11 @@ class Model(nn.Module):
 
         if targets is not None:
             
-            """
-            Supervised Contrastive Learning
-            """
-            norm_out = F.normalize(out, dim=-1) # Normalizing the embeddings (B, d_model)
-            cosine_score = torch.exp(norm_out @ norm_out.t() / 0.07) # (B,B)
-            
-            # (B,B) where 1 represents examples belonging to the same user, and 0 represents examples belonging to different users
-            mask = (targets.unsqueeze(1) == targets.unsqueeze(0)).float()
-
-            # Subtracting the diagnol, i.e. same pairings
-            cosine_score = cosine_score - torch.diag(torch.diag(cosine_score)) #(B, B)
-
-            # Removing the diagnol i.e. same pairings
-            mask = mask - torch.diag(torch.diag(mask))
-
-            cos_loss = cosine_score / cosine_score.sum(dim=-1, keepdim=True) # (B,B) / (B,1) = (B,B)
-            cos_loss = -torch.log(cos_loss + 1e-5) # (B,B)
-            cos_loss = (mask * cos_loss).sum(-1) / (mask.sum(-1) + 1e-3) # (B,1) / (Num. of positives) = (B,1)
-            cos_loss = cos_loss.mean() # Average over all: Scalar
-
-            """
-            Margin Based Contrastive Loss
-            # (B,B) representing pairwise distances of the output embeddings
-            dist = ((out.unsqueeze(1) - out.unsqueeze(0)) ** 2).mean(-1) 
-            # (B,B) where 1 represents examples belonging to the same user, and 0 represents examples belonging to different users
-            pos_mask = (targets.unsqueeze(1) == targets.unsqueeze(0)).float()
-            # Removing the diagnol i.e. self pairing from the positive mask
-            pos_mask = pos_mask - torch.diag(torch.diag(pos_mask))
-            # (B,B) where 1 represents examples belonging to different users.
-            neg_mask = (targets.unsqueeze(1) != targets.unsqueeze(0)).float()
-
-            if self.training:
-                print("Positive Sum", ((dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3)).mean().item(), "Negative Sum", ((dist * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)).mean().item())
-            # Maximum distance of instances belonging to same labels - Acts as the margin
-            max_dist = 10
-            # Contrastive Loss
-            cos_loss = (dist * pos_mask).sum(-1) / (pos_mask.sum(-1) + 1e-3) + (F.relu(max_dist - dist) * neg_mask).sum(-1) / (neg_mask.sum(-1) + 1e-3)
-            cos_loss = cos_loss.mean()
-            """
-
             # Cross entropy loss
-            cross_entropy_loss = F.cross_entropy(logits, targets)
+            loss = F.cross_entropy(logits, targets)
 
-            # Total Loss
-            loss = cross_entropy_loss + (self.config.contrastive_loss_alpha * cos_loss)
         # Return embeddings, logits and loss
-        return out, logits, cos_loss, cross_entropy_loss, loss 
+        return out, logits, loss 
     
 
 if __name__ == "__main__":
