@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+import math
 from sklearn.covariance import LedoitWolf
 from sklearn.metrics import roc_curve, roc_auc_score
-from exp1.data_loader import get_validation_dataloader
-from exp1.model import Model, ModelConfig
+from data_loader import get_validation_dataloader
+from model_basic import Model, ModelConfig
 
 
 def compute_eer(y_true, y_score):
@@ -77,15 +78,22 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         # impostor: pool all other users' first verify samples
         imp_emb = []
 
-        other_user_sequences = []
+        other_user_sequences = []        
+        sequence_to_take_per_user = math.ceil(len(v_emb) / (len(val_user_to_indices.keys()) - 1))
+        print("Sequence To Take Per User", sequence_to_take_per_user)
         for other_user, other_user_sequence_indices in val_user_to_indices.items():
             if other_user == u: continue
+
             num_sequences = len(other_user_sequence_indices) // 2
-            other_user_sequences.extend([val_sequences[i] for i in other_user_sequence_indices[:num_sequences]])
+            other_user_sequences.extend([val_sequences[i] for i in other_user_sequence_indices[:sequence_to_take_per_user]])
+            if len(other_user_sequences) >= len(v_emb):
+                break
 
         imp_emb = embed_sessions(model=model, val_sequences=other_user_sequences, val_user_ids=[-1] * len(other_user_sequences),
                                   device=device, batch_size=batch_size)
         
+        print(f"User: {u} | # enrollment: {len(e_emb)} | # verify: {len(v_emb)} | # imposter: {len(imp_emb)}")
+
         cos_i, mah_i = score_user(e_emb, imp_emb, P)
 
         # compute EERs
@@ -101,6 +109,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         )
         mah_eers.append(eer_m)
 
+        print(f"User: {u} | EERs: | cosine: {eer_c} | maha: {eer_m}")
     model.train()
     return np.mean(cos_eers), np.mean(mah_eers)
 

@@ -19,9 +19,9 @@ from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
 
 
-from exp1.model import ModelConfig, Model
-from exp1.data_loader import get_training_dataloader, get_validation_dataloader
-from exp1.validation import validate, estimate_train_loss
+from model_basic import ModelConfig, Model
+from data_loader import get_training_dataloader, get_validation_dataloader
+from validation import validate, estimate_train_loss
 
 # import sys
 

@@ -154,6 +154,11 @@ Cross Entropy Loss: train_1.py
         - All Sequences: 50% for enrollment and 50% for verify:  **5.4212**
     - Tested on 10 users (v1_merged_test_users_data)
         -  All Sequences: 50% for enrollment and 50% for verify: **5.1212%**
+        - When taking equal number of imposter sequences per user: **3.5347**
+
+    - Tried 2 Layers -> 5.57 X
+
+
 
 
 

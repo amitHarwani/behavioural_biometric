@@ -6,9 +6,9 @@ import pickle
 import numpy as np
 from collections import defaultdict
 
-from exp1.train_1 import merge_sequences_overlap
-from exp1.model import Model, ModelConfig
-from exp1.validation import validate
+from train_1 import merge_sequences_overlap
+from model_basic import Model, ModelConfig
+from validation import validate
 
 
 def normalize_and_init_dataset(data, screen_dim_x, screen_dim_y, split="train"):
@@ -51,9 +51,9 @@ if __name__ == "__main__":
 
 
     version = "v1"
-    test_dataset_file = f"{version}_validation_users_data_tw10ms.pickle"
-    test_dataset_merged_file = f"{version}_merged_validation_users_data_tw10ms.pickle"
-    cp_files = ["./checkpoints/train_1_1.pt"]
+    test_dataset_file = f"{version}_test_users_data_tw10ms.pickle"
+    test_dataset_merged_file = f"{version}_merged_test_users_data_tw10ms.pickle"
+    cp_files = ["./exp1/checkpoint_train_1_1.pt"]
 
       # If the preprocessed files have been merged
     if os.path.exists(test_dataset_merged_file) :
