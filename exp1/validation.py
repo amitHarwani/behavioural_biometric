@@ -3,8 +3,8 @@ import torch
 import torch.nn.functional as F
 from sklearn.covariance import LedoitWolf
 from sklearn.metrics import roc_curve, roc_auc_score
-from data_loader import get_validation_dataloader
-from model_basic import Model, ModelConfig
+from exp1.data_loader import get_validation_dataloader
+from exp1.model import Model, ModelConfig
 
 
 def compute_eer(y_true, y_score):

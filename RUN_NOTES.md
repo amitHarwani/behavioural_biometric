@@ -135,18 +135,19 @@ the previous highest performance of 12%
 
 -----------------------------------------------
 
+exp1
 Cross Entropy Loss: train_1.py
 
 - train_1.pt: 
 
-    - Training on 10 user dataset (v1_merged_test_users_data) [Cross Entropy Loss] 
+    - Training on 10 user dataset (v1_merged_test_users_data) [Cross Entropy Loss] [BatchSize: 32]
         - Divided it also to train and test sequences with 20% test sequences.
     - Tested on 10 users (v1_merged_validation_users_data)   
         - 50 Squences Per Session: 50% for enrollment and 50% for verify: Mahaloobis EER: 10.02%
         - All Sequences: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.74%
 
 - train_1_1.pt
-    - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss]
+    - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 64]
         - Divided it also to train and test sequences with 20% test sequences.
     - Tested on 10 users (v1_merged_validation_users_data) 
         - During Training: 50 Seq per session: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.73%

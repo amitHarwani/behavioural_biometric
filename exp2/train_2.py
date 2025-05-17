@@ -19,9 +19,9 @@ from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
 
 
-from model_basic import ModelConfig, Model
-from data_loader import get_training_dataloader, get_validation_dataloader
-from validation import validate, estimate_train_loss
+from exp2.model import ModelConfig, Model
+from exp2.data_loader import get_training_dataloader, get_validation_dataloader
+from exp2.validation import validate, estimate_train_loss
 
 # import sys
 
@@ -37,7 +37,7 @@ def normalize_and_init_dataset(data, screen_dim_x, screen_dim_y, split="train"):
 
     for u_idx, user in enumerate(data):
         for s_idx, session in enumerate(user):
-            for seq_idx, sequence in enumerate(session if split == "train" else session):
+            for seq_idx, sequence in enumerate(session if split == "train" else session[:50]):
                 sequence[:, 0:9] /= 1000 # Times - Normalized to seconds
                 sequence[:, 9] /= 255 # Keycode Normalization
                 sequence[:, 10:13] /= 10 # Accelerometer x, y, z
@@ -113,7 +113,7 @@ if __name__ == "__main__":
         seq_len= 200, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
         dropout=0,
-        n_layers= 1, # Number of layers or transformer encoders
+        n_layers= 2, # Number of layers or transformer encoders
         n_users = 79, # Number of users (For classification)
         contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
     )

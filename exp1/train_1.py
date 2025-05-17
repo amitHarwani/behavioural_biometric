@@ -16,11 +16,12 @@ from sklearn.covariance import EmpiricalCovariance, LedoitWolf
 from sklearn.metrics import roc_curve, roc_auc_score
 from scipy.optimize import brentq
 from scipy.interpolate import interp1d
+from sklearn.model_selection import train_test_split
 
 
-from model_basic import ModelConfig, Model
-from data_loader import get_training_dataloader
-from validation import validate, estimate_train_loss
+from exp1.model import ModelConfig, Model
+from exp1.data_loader import get_training_dataloader, get_validation_dataloader
+from exp1.validation import validate, estimate_train_loss
 
 # import sys
 
@@ -103,29 +104,6 @@ def merge_sequences_overlap(data: list[list[pd.DataFrame]], merge_length, overla
     return merged_data
 
 
-class EarlyStopping:
-    def __init__(self, patience=10, min_delta=0.001):
-        """
-        Args:
-            patience (int): How many epochs to wait for improvement.
-            delta_ratio (float): Fraction of best loss to use as min_delta.
-        """
-        self.patience = patience
-        self.min_delta = min_delta
-        self.best_val_loss = float('inf')
-        self.counter = 0
-        self.early_stop = False
-
-    def __call__(self, val_loss):
-
-        if val_loss < self.best_val_loss - self.min_delta:
-            self.best_val_loss = val_loss
-            self.counter = 0
-        else:
-            self.counter += 1
-            if self.counter > self.patience:
-                self.early_stop = True
-
 if __name__ == "__main__":
     # Parameters
     model_config = ModelConfig(
@@ -136,15 +114,13 @@ if __name__ == "__main__":
         n_temporal_heads= 4, # Num. of temporal heads
         dropout=0,
         n_layers= 1, # Number of layers or transformer encoders
-        n_users = 10, # Number of users (For classification)
+        n_users = 79, # Number of users (For classification)
         contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
-    n_classes_per_batch = 2
-    n_samples_per_class = 4
-    batch_size = n_classes_per_batch * n_samples_per_class # Batch size
-    actual_batch_size = 8
+    batch_size = 64 # Batch size
+    actual_batch_size = 64
     accum_steps = actual_batch_size // batch_size
     n_epochs = 10 # Number of epochs
     overlap_len = 100
@@ -152,45 +128,29 @@ if __name__ == "__main__":
     
 
     # Preprocessed files
-    train_dataset_file = f"{version}_training_users_data_tw10ms.pickle"
-    val_dataset_file = f"{version}_validation_users_data_tw10ms.pickle"
+    train_dataset_merged_file = f"v1_merged_training_users_data_tw10ms.pickle"
+    val_dataset_merged_file = f"v1_merged_validation_users_data_tw10ms.pickle"
+    
 
-    train_dataset_merged_file = f"{version}_merged_training_users_data_tw10ms.pickle"
-    val_dataset_merged_file = f"{version}_merged_validation_users_data_tw10ms.pickle"
+    # Loading the preprocessed objects
+    with open(train_dataset_merged_file, "rb") as infile:
+        train_dataset = pickle.load(infile)
 
-    # If the preprocessed files have been merged
-    if os.path.exists(train_dataset_merged_file) and os.path.exists(val_dataset_merged_file):
-        # Loading the preprocessed merged objects
-        with open(train_dataset_merged_file, "rb") as infile:
-            train_dataset = pickle.load(infile)
-
-        with open(val_dataset_merged_file, "rb") as infile:
-            val_dataset = pickle.load(infile)
-    else:
-        # Loading the preprocessed objects
-        with open(train_dataset_file, "rb") as infile:
-            train_dataset = pickle.load(infile)
-
-        with open(val_dataset_file, "rb") as infile:
-            val_dataset = pickle.load(infile)
-
-        # Merging the sequences
-        train_dataset = merge_sequences_overlap(train_dataset, merge_length=model_config.seq_len, overlap_length=overlap_len)
-        val_dataset = merge_sequences_overlap(val_dataset, merge_length=model_config.seq_len, overlap_length=overlap_len)
-
-        # Inserting into the file
-        with open(train_dataset_merged_file, "wb") as outfile:
-            pickle.dump(train_dataset, outfile)
-        with open(val_dataset_merged_file, "wb") as outfile:
-            pickle.dump(val_dataset, outfile)
+    with open(val_dataset_merged_file, "rb") as infile:
+        unseen_dataset = pickle.load(infile)
 
     print("Starting Normalization")
     # Normalizing the datasets
     train_sequences, train_user_ids, train_user_to_indices = normalize_and_init_dataset(train_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="train")
-    val_sequences, val_user_ids, val_user_to_indices = normalize_and_init_dataset(val_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="val")
-    print("Normalization Complete")
+    
+    unseen_sequences, unseen_user_ids, unseen_user_to_indices = normalize_and_init_dataset(unseen_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="test")
+        
 
-    print("Train sequences", len(train_user_ids), "Val sequences", len(val_user_ids))
+    X_train, X_test, y_train, y_test = train_test_split(train_sequences, train_user_ids, test_size=0.2)
+
+    print("Normalization and split Complete")
+
+    print("Train sequences", len(X_train), "Test Sequences", len(X_test))
 
     # Identifying Device
     device = "cpu"
@@ -201,9 +161,8 @@ if __name__ == "__main__":
     print("Device: ", device)
 
     # Data Loaders | Training dataloader uses a Contrastive Sampler
-    training_dataloader = get_training_dataloader(train_sequences=train_sequences, train_user_ids=train_user_ids, train_user_to_indices=train_user_to_indices, 
-                                                  n_classes_per_batch=n_classes_per_batch, n_samples_per_class=n_samples_per_class, sequence_length=model_config.seq_len, num_workers=0)
-    
+    training_dataloader = get_validation_dataloader(val_sequences=X_train, val_user_ids=y_train, batch_size=32, sequence_length=200, num_workers=0)
+    test_dataloader = get_validation_dataloader(val_sequences=X_test, val_user_ids=y_test, batch_size=32, sequence_length=200, num_workers=0)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')
@@ -230,53 +189,26 @@ if __name__ == "__main__":
         # Linear warmup
         if iteration < warmup_steps:
             return max_lr * ((iteration + 1) / warmup_steps)
-        return max_lr
-        # if iteration >= total_steps_to_train:
-        #     return min_lr
-        # # Cosine decay
-        # decay_ratio = (iteration - warmup_steps) / (total_steps_to_train - warmup_steps) # Between 0 and 1
-        # assert 0<=decay_ratio<=1
-        # coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff  starts at 1 and goes to 0
-        # return min_lr + coeff * (max_lr - min_lr) 
+        if iteration >= total_steps_to_train:
+            return min_lr
+        # Cosine decay
+        decay_ratio = (iteration - warmup_steps) / (total_steps_to_train - warmup_steps) # Between 0 and 1
+        assert 0<=decay_ratio<=1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff  starts at 1 and goes to 0
+        return min_lr + coeff * (max_lr - min_lr) 
     
     # Optimizer
-    # Create AdamW optimizer and use the fused version if it is available - when running on CUDA
-    # Instead of iterating over all the tensors and updating them which would launch many kernels, Fused would fuse all these kernels 
     fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
     use_fused = fused_available and 'cuda' in device
     optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
-    # Tell PyTorch to print the full tensor
-    # torch.autograd.set_detect_anomaly(True)
-
-    start_epoch_count = 0
     step_count = 0
 
-    # To store validation eers list, for plotting 
-    val_eers = []
-    train_losses = []
+    train_accuracies = []
+    test_accuracies = []
+    eers = []
 
-    # Loading the model from checkpoint if training is being continued
-    mode = {'type': "SCRATCH", 'checkpoint_file': ""}
-    if mode['type'] == "RESUME":
-        checkpoint = torch.load(mode['checkpoint_file'], map_location=device, weights_only=False)
-        model_config = checkpoint['config']
-        model = Model(model_config)
-        model.load_state_dict(checkpoint['model'])
-        model.to(device)
-        max_lr = checkpoint['max_lr']
-        min_lr = checkpoint['min_lr']
-        optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        start_epoch_count = checkpoint['epoch'] + 1
-        step_count = checkpoint['step_count']
-        val_eers = checkpoint['val_eers']
-        train_losses = checkpoint['train_losses']
-
-    # Early stopper
-    early_stopper = EarlyStopping(patience=5, min_delta=0.001)
-    
-    for epoch in range(start_epoch_count, n_epochs):
+    for epoch in range(0, n_epochs):
         loss_accum = 0.0
         for batch_step, batch in enumerate(training_dataloader):
             print("Batch-Step", batch_step)
@@ -284,13 +216,13 @@ if __name__ == "__main__":
             labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
             modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
 
-            emb, logits, cos_loss, cross_entropy_loss, loss = model(inputs=sequences, modality_mask=modality_mask, targets=labels)
+            emb, logits, loss = model(inputs=sequences, modality_mask=modality_mask, targets=labels)
 
-            cos_loss = cos_loss / accum_steps
+            loss = loss / accum_steps
             # Backprop
-            cos_loss.backward()
+            loss.backward()
             
-            loss_accum += cos_loss.detach()
+            loss_accum += loss.detach()
 
             # Once the desired batch size is reached
             if (batch_step + 1) % accum_steps == 0:
@@ -306,37 +238,91 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad() # Zeroing the gradients
 
-                # torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
+                torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
 
-                print(f"step {step_count} | lr: {lr} | cos_loss: {loss_accum.item():.6f} | norm: {norm:.4f}")
+                print(f"step {step_count} | lr: {lr} | loss: {loss_accum.item():.6f} | norm: {norm:.4f}")
                 print("--")
                 loss_accum = 0.0
                 step_count += 1
 
-        # After every epoch - Validate
-        avg_cos_eer, avg_maha_eer = validate(model=model, val_sequences=val_sequences, val_user_ids=val_user_ids, val_user_to_indices=val_user_to_indices,
-                                             device=device, batch_size=64)
-        avg_train_loss = estimate_train_loss(model=model, train_dataloader=training_dataloader, device=device)
-        print(f"Validation Result -------- avg_cos_eer: {avg_cos_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | train_loss: {avg_train_loss:.4f}")
-        val_eers.append((avg_cos_eer, avg_maha_eer))
-        train_losses.append(avg_train_loss)
-        checkpoint = {
-            'model': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch,
-            'avg_cos_eer': avg_cos_eer,
-            'avg_maha_eer': avg_maha_eer,
-            'config': model_config,
-            'step_count': step_count,
-            'max_lr': max_lr,
-            'min_lr': min_lr,
-            'val_eers': val_eers,
-            'train_losses': train_losses,
-            'screen_dim_x': screen_dim_x,
-            'screen_dim_y': screen_dim_y
+        
+        with torch.no_grad():
+            model.eval()
+            train_correct = 0
+            train_total = 0
+            test_correct = 0
+            test_total = 0
+            for step, batch in enumerate(training_dataloader):
+                sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+                labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+                modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
 
-        }
-        torch.save(checkpoint, f"./checkpoints/v1_test_run7_{epoch}.pt")
+                # print("Sequences", sequences)
+                # print("Labels", labels)
+                emb, logits, loss = model(inputs=sequences, modality_mask=modality_mask)
+
+                probs = F.softmax(logits, dim=1)
+                
+                preds = probs.argmax(dim=1)
+
+                train_correct += (preds == labels).sum().item()
+                train_total += labels.size(0)
+
+            for step, batch in enumerate(test_dataloader):
+                sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+                labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+                modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
+                
+                # print("Sequences", sequences)
+                # print("Labels", labels)
+                emb, logits, loss = model(inputs=sequences, modality_mask=modality_mask)
+
+                probs = F.softmax(logits, dim=1)
+                
+                preds = probs.argmax(dim=1)
+
+                test_correct += (preds == labels).sum().item()
+                test_total += labels.size(0)
+
+            train_acc = train_correct/train_total
+            test_acc = test_correct/test_total
+            train_accuracies.append(train_acc)
+            test_accuracies.append(test_acc)
+            print(f"Train Accuracy: {train_acc:.4f}")
+            print(f"Test Accuracy: {test_acc:.4f}")
+            cos_eer, maha_eer = validate(model=model, val_sequences=unseen_sequences, val_user_ids=unseen_user_ids, val_user_to_indices=unseen_user_to_indices, device=device, batch_size=32)
+
+            print(f"EERs: {cos_eer:.4f} | {maha_eer:.4f}")
+            eers.append((cos_eer, maha_eer))
+            model.train()
+
+
+    # X-axis: Epochs
+    epochs = range(1, len(train_accuracies) + 1)
+
+    # Plotting
+    plt.plot(epochs, train_accuracies, label='Train Accuracies', marker='o')
+    plt.plot(epochs, test_accuracies, label='Test Accuracies', marker='x')
+
+    # Labels and Title
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Train vs Test Accuracies')
+    plt.legend()
+    plt.grid(True)
+
+    # Show plot
+    plt.show()
+
+    torch.save({
+        'model': model.state_dict(),
+        'eers': eers,
+        'train_accuracies': train_accuracies,
+        'test_accuracies': test_accuracies,
+        'eers': eers,
+        'config': model_config
+    },"./checkpoints/train_1_1.pt")
+        
     
 
         
