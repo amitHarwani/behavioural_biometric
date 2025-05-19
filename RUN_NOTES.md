@@ -169,6 +169,12 @@ Cross Entropy Loss: train_2.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **3.0841**
         - When taking equal number of imposter sequences per user: **2.9946**
 
+- train_2_0_epoch_19.pt:
+    - Continued training from the above to 20 epochs, max_lr: 6e-5, min_lr: 6e-6(Continuation)
+    - Tested on 10 users (v1_merged_test_users_data)
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5005**
+        - When taking equal number of imposter sequences per user: **2.3303**
+
 
 
 

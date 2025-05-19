@@ -122,7 +122,7 @@ if __name__ == "__main__":
     batch_size = 32 # Batch size
     actual_batch_size = 32
     accum_steps = actual_batch_size // batch_size
-    n_epochs = 10 # Number of epochs
+    n_epochs = 20 # Number of epochs
     overlap_len = 100
     version = "v1"
     
@@ -178,7 +178,7 @@ if __name__ == "__main__":
 
     print("steps_per_epoch", steps_per_epoch, "optimizer_steps_per_epoch", optimizer_steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 6e-4 # 0.0006 # 1e-4
+    max_lr = 6e-5 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
     warmup_steps = optimizer_steps_per_epoch * 2 # 10% of total steps
 
@@ -202,12 +202,26 @@ if __name__ == "__main__":
     optimizer = model.configure_optimizers(0.1, max_lr, device=device)
 
     step_count = 0
+    start_epoch = 0
 
     train_accuracies = []
     test_accuracies = []
     eers = []
 
-    for epoch in range(0, n_epochs):
+    # Resuming Training
+    cp = torch.load("./exp2/train_2_0_epoch_9.pt", weights_only=False)
+
+    model = Model(cp['config'])
+    model.load_state_dict(cp['model'])
+    model.to(device)
+    optimizer = model.configure_optimizers(0.1, max_lr, device=device)
+    optimizer.load_state_dict(cp['optimizer'])
+    eers = cp['eers']
+    start_epoch = 10
+    step_count = (optimizer_steps_per_epoch * 10) + 1
+    print("Resuming Training | step_count", step_count, " | start_epoch", start_epoch)
+
+    for epoch in range(start_epoch, n_epochs):
         loss_accum = 0.0
         for batch_step, batch in enumerate(training_dataloader):
             print("Batch-Step", batch_step)
