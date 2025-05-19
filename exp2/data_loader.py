@@ -287,6 +287,10 @@ def get_validation_dataloader(val_sequences, val_user_ids, batch_size=64, sequen
 def get_testing_dataloader(test_sequences, test_user_ids, batch_size=64, sequence_length=200, num_workers=4) -> DataLoader:
     # Testing dataset
     dataset = TestingDataset(test_sequences, test_user_ids)
+
+    # Using partial to fix the max_sequence_length
+    collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length)
+
     # Set seed for reproducibility
     seed = 42
     torch.manual_seed(seed)
@@ -295,8 +299,6 @@ def get_testing_dataloader(test_sequences, test_user_ids, batch_size=64, sequenc
 
     g = torch.Generator()
     g.manual_seed(seed)
-    # Using partial to fix the max_sequence_length
-    collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length)
 
     dataloader = DataLoader(
         dataset=dataset,

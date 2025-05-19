@@ -3,8 +3,8 @@ import torch
 import torch.nn.functional as F
 from sklearn.covariance import LedoitWolf
 from sklearn.metrics import roc_curve, roc_auc_score
-from exp3.data_loader import get_validation_dataloader
-from exp3.model import Model, ModelConfig
+from data_loader import get_validation_dataloader
+from model import Model, ModelConfig
 
 
 def compute_eer(y_true, y_score):
@@ -48,12 +48,16 @@ def score_user(enroll_emb, verify_emb, precision=None):
     else:
         maha_scores = None
 
-    return cos_scores, maha_scores
+    # L2 (Euclidean) scores
+    l2_distances = torch.cdist(verify_emb, enroll_emb, p=2)  # Pairwise L2 distances
+    l2_scores = -l2_distances.mean(dim=1).cpu().numpy()  # Negate to align with similarity-based metrics
+
+    return cos_scores, maha_scores, l2_scores
 
 @torch.no_grad()
 def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, device, batch_size=16):
     model.eval()
-    cos_eers, mah_eers = [], []
+    cos_eers, mah_eers, l2_eers = [], [], []
     for u, sequence_indices in val_user_to_indices.items():
         
         user_sequences = [val_sequences[i] for i in sequence_indices]
@@ -73,7 +77,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         ) # Covariance matrix of the centered embeddings
 
         # genuine scores
-        cos_g, mah_g = score_user(e_emb, v_emb, P)
+        cos_g, mah_g, l2_g = score_user(e_emb, v_emb, P)
         # impostor: pool all other users' first verify samples
         imp_emb = []
 
@@ -86,7 +90,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         imp_emb = embed_sessions(model=model, val_sequences=other_user_sequences, val_user_ids=[-1] * len(other_user_sequences),
                                   device=device, batch_size=batch_size)
         
-        cos_i, mah_i = score_user(e_emb, imp_emb, P)
+        cos_i, mah_i, l2_i = score_user(e_emb, imp_emb, P)
 
         # compute EERs
         eer_c, _ = compute_eer(
@@ -101,8 +105,15 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         )
         mah_eers.append(eer_m)
 
+        eer_l2, _ = compute_eer(
+            np.concatenate([np.ones_like(l2_g), np.zeros_like(l2_i)]),
+            np.concatenate([l2_g, l2_i]),
+        )
+        l2_eers.append(eer_l2)
+        print(f"User: {u} | EERs: | cosine: {eer_c} | maha: {eer_m} | l2: {eer_l2}")
+
     model.train()
-    return np.mean(cos_eers), np.mean(mah_eers)
+    return np.mean(cos_eers), np.mean(mah_eers), np.mean(l2_eers)
 
 @torch.no_grad()
 def estimate_train_loss(model: Model, train_dataloader, device):

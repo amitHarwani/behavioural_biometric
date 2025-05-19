@@ -52,7 +52,7 @@ def score_user(enroll_emb, verify_emb, precision=None):
     return cos_scores, maha_scores
 
 @torch.no_grad()
-def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, device, batch_size=16):
+def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, device, batch_size=16, all_imp = True):
     model.eval()
     cos_eers, mah_eers = [], []
     for u, sequence_indices in val_user_to_indices.items():
@@ -80,13 +80,13 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
 
         other_user_sequences = []        
         sequence_to_take_per_user = math.ceil(len(v_emb) / (len(val_user_to_indices.keys()) - 1))
-        print("Sequence To Take Per User", sequence_to_take_per_user)
+        # print("Sequence To Take Per User", sequence_to_take_per_user)
         for other_user, other_user_sequence_indices in val_user_to_indices.items():
             if other_user == u: continue
 
-            num_sequences = len(other_user_sequence_indices) // 2
-            other_user_sequences.extend([val_sequences[i] for i in other_user_sequence_indices[:sequence_to_take_per_user]])
-            if len(other_user_sequences) >= len(v_emb):
+            num_sequences = len(other_user_sequence_indices) // 2 if all_imp else sequence_to_take_per_user
+            other_user_sequences.extend([val_sequences[i] for i in other_user_sequence_indices[:num_sequences]])
+            if len(other_user_sequences) >= len(v_emb) and not all_imp:
                 break
 
         imp_emb = embed_sessions(model=model, val_sequences=other_user_sequences, val_user_ids=[-1] * len(other_user_sequences),

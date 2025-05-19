@@ -135,7 +135,7 @@ the previous highest performance of 12%
 
 -----------------------------------------------
 
-exp1
+## exp1
 Cross Entropy Loss: train_1.py
 
 - train_1.pt: 
@@ -144,30 +144,31 @@ Cross Entropy Loss: train_1.py
         - Divided it also to train and test sequences with 20% test sequences.
     - Tested on 10 users (v1_merged_validation_users_data)   
         - 50 Squences Per Session: 50% for enrollment and 50% for verify: Mahaloobis EER: 10.02%
-        - All Sequences: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.74%
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.74%
 
 - train_1_1.pt
-    - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 64]
+    - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 32]
         - Divided it also to train and test sequences with 20% test sequences.
     - Tested on 10 users (v1_merged_validation_users_data) 
         - During Training: 50 Seq per session: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.73%
-        - All Sequences: 50% for enrollment and 50% for verify:  **5.4212**
+        - All Imp. Sequences: 50% for enrollment and 50% for verify:  **5.4212**
     - Tested on 10 users (v1_merged_test_users_data)
-        -  All Sequences: 50% for enrollment and 50% for verify: **5.1212%**
-        - When taking equal number of imposter sequences per user: **3.5347**
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: **4.9671**
+        - When taking equal number of imposter sequences per user: **3.8478**
 
     - Tried 2 Layers -> 5.57 X
 
 
+## exp 2
+Cross Entropy Loss: train_2.py
 
+- train_2_0_epoch_9.pt: 
+    -  Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 32]
+        - Add dropout of 0.2, and weight decay of 0.1, and trained on the entire 79 users (No test sequence division)
+     - Tested on 10 users (v1_merged_test_users_data)
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: **3.0841**
+        - When taking equal number of imposter sequences per user: **2.9946**
 
-
-# Run - Temperature: 0.05 and maybe higher
-# Run - 128 embedding 
-# Run - Flattening instead of CLS Token
-# Run - More Layers, More Heads
-# Run - Channel Attention
-# Run - CNN 
 
 
 
