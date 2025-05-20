@@ -19,7 +19,7 @@ from scipy.interpolate import interp1d
 from sklearn.model_selection import train_test_split
 
 
-from model_basic import ModelConfig, Model
+from model import ModelConfig, Model
 from data_loader import get_training_dataloader, get_validation_dataloader
 from validation import validate, estimate_train_loss
 
@@ -112,17 +112,19 @@ if __name__ == "__main__":
         d_model= 64, # Num. of features
         seq_len= 200, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
-        dropout=0.3,
-        n_layers= 1, # Number of layers or transformer encoders
+        dropout=0,
+        n_layers= 2, # Number of layers or transformer encoders
         n_users = 79, # Number of users (For classification)
-        contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
+        arcface_margin=torch.tensor(0.05),
+        arcface_scale=32,
+        loss_func='af' 
     )
     screen_dim_x=1903 # Screen width (For touch data)
     screen_dim_y=1920 # Screen height (For touch data)
     batch_size = 32 # Batch size
     actual_batch_size = 32
     accum_steps = actual_batch_size // batch_size
-    n_epochs = 20 # Number of epochs
+    n_epochs = 10 # Number of epochs
     overlap_len = 100
     version = "v1"
     
@@ -137,18 +139,20 @@ if __name__ == "__main__":
         train_dataset = pickle.load(infile)
 
     with open(val_dataset_merged_file, "rb") as infile:
-        val_dataset = pickle.load(infile)
+        unseen_dataset = pickle.load(infile)
 
     print("Starting Normalization")
-
     # Normalizing the datasets
-    train_sequences, train_user_ids, train_user_to_indices = normalize_and_init_dataset(train_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="train")        
+    train_sequences, train_user_ids, train_user_to_indices = normalize_and_init_dataset(train_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="train")
     
-    val_sequences, val_user_ids, val_user_to_indices = normalize_and_init_dataset(val_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="val")        
-    
+    unseen_sequences, unseen_user_ids, unseen_user_to_indices = normalize_and_init_dataset(unseen_dataset, screen_dim_x=screen_dim_x, screen_dim_y=screen_dim_y, split="test")
+        
+
+    X_train, X_test, y_train, y_test = train_test_split(train_sequences, train_user_ids, test_size=0.2)
+
     print("Normalization and split Complete")
 
-    print("Train sequences", len(train_sequences), "# of Users", len(set(train_user_ids)))
+    print("Train sequences", len(X_train), "Test Sequences", len(X_test), "# of Train Users", len(set(y_train)), "# of Test Users", len(set(y_test)))
 
     # Identifying Device
     device = "cpu"
@@ -159,8 +163,10 @@ if __name__ == "__main__":
     print("Device: ", device)
 
     # Data Loaders | Training dataloader uses a Contrastive Sampler
-    training_dataloader = get_validation_dataloader(val_sequences=train_sequences, val_user_ids=train_user_ids, 
-                                                    batch_size=batch_size, sequence_length=model_config.seq_len, num_workers=0)
+    training_dataloader = get_validation_dataloader(val_sequences=X_train, val_user_ids=y_train, batch_size=batch_size, 
+                                                    sequence_length=model_config.seq_len, num_workers=0)
+    test_dataloader = get_validation_dataloader(val_sequences=X_test, val_user_ids=y_test, batch_size=batch_size, 
+                                                sequence_length=model_config.seq_len, num_workers=0)
     
     # Enabling Tensor Flow 32 (TF32) to make calculations faster 
     torch.set_float32_matmul_precision('high')
@@ -178,7 +184,7 @@ if __name__ == "__main__":
 
     print("steps_per_epoch", steps_per_epoch, "optimizer_steps_per_epoch", optimizer_steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 6e-5 # 0.0006 # 1e-4
+    max_lr = 6e-4 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
     warmup_steps = optimizer_steps_per_epoch * 2 # 10% of total steps
 
@@ -196,30 +202,17 @@ if __name__ == "__main__":
         return min_lr + coeff * (max_lr - min_lr) 
     
     # Optimizer
-    # fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-    # use_fused = fused_available and 'cuda' in device
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
-    optimizer = model.configure_optimizers(0.1, max_lr, device=device)
+    fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+    use_fused = fused_available and 'cuda' in device
+    optimizer = torch.optim.AdamW(model.parameters(), lr=max_lr, fused=use_fused) # AdamW optimizer
 
     step_count = 0
-    start_epoch = 0
+
+    train_accuracies = []
+    test_accuracies = []
     eers = []
 
-    # Resuming Training
-    cp = torch.load("./exp3/train_3_0_epoch_9.pt", weights_only=False)
-
-    model = Model(cp['config'])
-    model.load_state_dict(cp['model'])
-    model.to(device)
-    optimizer = model.configure_optimizers(0.1, max_lr, device=device)
-    optimizer.load_state_dict(cp['optimizer'])
-    eers = cp['eers']
-    start_epoch = 10
-    step_count = optimizer_steps_per_epoch * 10
-    print("Resuming Training | step_count", step_count, " | start_epoch", start_epoch)
-
-
-    for epoch in range(start_epoch, n_epochs):
+    for epoch in range(0, n_epochs):
         loss_accum = 0.0
         for batch_step, batch in enumerate(training_dataloader):
             print("Batch-Step", batch_step)
@@ -256,16 +249,84 @@ if __name__ == "__main__":
                 loss_accum = 0.0
                 step_count += 1
 
-        cosine_eer, maha_eer = validate(model=model, val_sequences=val_sequences, val_user_ids=val_user_ids, 
-                 val_user_to_indices=val_user_to_indices, device=device, batch_size=batch_size, all_imp=True)
-        eers.append((cosine_eer, maha_eer))
-        print(f"Validation Result: {cosine_eer:.4f} | {maha_eer:.4f}")
+        
+        with torch.no_grad():
+            model.eval()
+            train_correct = 0
+            train_total = 0
+            test_correct = 0
+            test_total = 0
+            for step, batch in enumerate(training_dataloader):
+                sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+                labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+                modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
+
+                # print("Sequences", sequences)
+                # print("Labels", labels)
+                emb, logits, loss = model(inputs=sequences, modality_mask=modality_mask)
+
+                probs = F.softmax(logits, dim=1)
+                
+                preds = probs.argmax(dim=1)
+
+                train_correct += (preds == labels).sum().item()
+                train_total += labels.size(0)
+
+            for step, batch in enumerate(test_dataloader):
+                sequences = batch['sequences'].to(device) # (batch_size (B), sequence_length (T), embedding size (C))
+                labels = batch['user_ids'].to(device) # User IDs (batch_size (B))
+                modality_mask = batch['modality_mask'].to(device) # (B,T, 2)
+                
+                # print("Sequences", sequences)
+                # print("Labels", labels)
+                emb, logits, loss = model(inputs=sequences, modality_mask=modality_mask)
+
+                probs = F.softmax(logits, dim=1)
+                
+                preds = probs.argmax(dim=1)
+
+                test_correct += (preds == labels).sum().item()
+                test_total += labels.size(0)
+
+            train_acc = train_correct/train_total
+            test_acc = test_correct/test_total
+            train_accuracies.append(train_acc)
+            test_accuracies.append(test_acc)
+            print(f"Train Accuracy: {train_acc:.4f}")
+            print(f"Test Accuracy: {test_acc:.4f}")
+            cos_eer, maha_eer = validate(model=model, val_sequences=unseen_sequences, val_user_ids=unseen_user_ids, 
+                                         val_user_to_indices=unseen_user_to_indices, device=device, batch_size=batch_size)
+
+            print(f"EERs: {cos_eer:.4f} | {maha_eer:.4f}")
+            eers.append((cos_eer, maha_eer))
+            model.train()
+
         torch.save({
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
             'eers': eers,
+            'train_accuracies': train_accuracies,
+            'test_accuracies': test_accuracies,
+            'eers': eers,
             'config': model_config
         },f"./exp3/train_3_0_epoch_{epoch}.pt")
+
+    # X-axis: Epochs
+    epochs = range(1, len(train_accuracies) + 1)
+
+    # Plotting
+    plt.plot(epochs, train_accuracies, label='Train Accuracies', marker='o')
+    plt.plot(epochs, test_accuracies, label='Test Accuracies', marker='x')
+
+    # Labels and Title
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Train vs Test Accuracies')
+    plt.legend()
+    plt.grid(True)
+
+    # Show plot
+    plt.show()
 
 
         

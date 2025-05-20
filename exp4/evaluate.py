@@ -5,9 +5,8 @@ import os
 import pickle
 import numpy as np
 from collections import defaultdict
-
 from train_3 import merge_sequences_overlap
-from model_basic import Model, ModelConfig
+from model import Model, ModelConfig
 from validation import validate
 
 
@@ -53,7 +52,7 @@ if __name__ == "__main__":
     version = "v1"
     test_dataset_file = f"{version}_test_users_data_tw10ms.pickle"
     test_dataset_merged_file = f"{version}_merged_test_users_data_tw10ms.pickle"
-    cp_files = ["./exp3/train_3_0_epoch_19.pt"]
+    cp_files = ["./exp3/train_3_0_epoch_6.pt"]
 
       # If the preprocessed files have been merged
     if os.path.exists(test_dataset_merged_file) :
@@ -89,10 +88,9 @@ if __name__ == "__main__":
         model.load_state_dict(cp['model'])
         model.to(device)
 
-        avg_cosine_eer, avg_maha_eer = validate(model, test_sequences, test_user_ids, test_user_to_indices, device=device, all_imp=True)
+        avg_cosine_eer, avg_maha_eer, avg_l2_eer = validate(model, test_sequences, test_user_ids, test_user_to_indices, device=device)
 
-        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f}")
-        print("**********************************************************************************************************")
+        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_l2_eer: {avg_l2_eer:.4f}")
 
 
 

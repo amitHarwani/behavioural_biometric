@@ -175,6 +175,14 @@ Cross Entropy Loss: train_2.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5005**
         - When taking equal number of imposter sequences per user: **2.3303**
 
+# exp 4
+Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
+
+- train_3_0_epoch_19.pt: 
+    - Tested on 10 users (v1_merged_test_users_data)
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5797**
+        - When taking equal number of imposter sequences per user: **1.8637**
+
 
 
 
