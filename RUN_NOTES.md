@@ -175,13 +175,31 @@ Cross Entropy Loss: train_2.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5005**
         - When taking equal number of imposter sequences per user: **2.3303**
 
-# exp 4
+# exp 3
 Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
 
 - train_3_0_epoch_19.pt: 
     - Tested on 10 users (v1_merged_test_users_data)
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5797**
         - When taking equal number of imposter sequences per user: **1.8637**
+
+# exp 4
+Cross Entropy Loss: train_4.py:  Dropout 0.2, Add Channel Head Attention
+
+- train_4_0_epoch_29.pt: 
+    - Tested on 10 users (v1_merged_test_users_data)
+        - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.4347**
+        - When taking equal number of imposter sequences per user: **2.1603**
+
+
+
+Results: 
+|  Exp| Maha. EER (All Imp.)| Maha. EER (Equal Imp.)|
+|---|---|---|
+|  exp 1 - 10 epochs - Normal Transformer (CE Loss)       |4.9671|3.8478|
+|  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1 |2.5005|2.3303| 
+|  exp 3 - 20 epochs - Increase Dropout to 0.3            |2.5797|**1.8637**|
+|  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn |**2.4347**|2.1603|
 
 
 

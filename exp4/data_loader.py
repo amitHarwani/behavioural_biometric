@@ -44,14 +44,13 @@ class ValidationDataset(Dataset):
     
 class TestingDataset(Dataset):
     
-    def __init__(self,  test_sequences: list, test_user_ids: list, test_user_to_indices: dict):
+    def __init__(self,  test_sequences: list, test_user_ids: list):
         """
         Args:
             data: [users][sessions][sequences] hierarchical data
         """
         self.sequences = test_sequences
         self.user_ids = test_user_ids
-        self.user_to_indices = test_user_to_indices
     
     def __len__(self):
         return len(self.sequences) # Size of dataset = num. of sequences
@@ -285,19 +284,29 @@ def get_validation_dataloader(val_sequences, val_user_ids, batch_size=64, sequen
 
     return dataloader
 
-def get_testing_dataloader(test_sequences, test_user_ids, test_user_to_indices, batch_size=64, sequence_length=200, num_workers=4) -> DataLoader:
+def get_testing_dataloader(test_sequences, test_user_ids, batch_size=64, sequence_length=200, num_workers=4) -> DataLoader:
     # Testing dataset
-    dataset = TestingDataset(test_sequences, test_user_ids, test_user_to_indices)
+    dataset = TestingDataset(test_sequences, test_user_ids)
 
     # Using partial to fix the max_sequence_length
     collate_fn_initialized = partial(collate_fn, max_sequence_len=sequence_length)
+
+    # Set seed for reproducibility
+    seed = 42
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
 
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=batch_size,
         num_workers=num_workers,
         collate_fn=collate_fn_initialized,
-        shuffle=True
+        shuffle=True,
+        generator=g
     )
 
     return dataloader

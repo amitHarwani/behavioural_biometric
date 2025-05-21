@@ -11,77 +11,13 @@ class ModelConfig:
     d_model: int = 128 # Num. of Features
     seq_len: int = 200 # Sequence length
     n_temporal_heads: int = 4 # Num. of temporal heads
+    n_channel_heads: int = 4
     n_layers: int = 5 # Number of Layers
     dropout: float = 0.1
     n_users: int = 79 # Number of users to classify
-    loss_func: str = "ce"
-    arcface_margin: float = 0.5
-    arcface_scale: int = 64
+    contrastive_loss_alpha: int = 2 # Contrastive loss importance - hyperparameter (Alpha)
 
 
-class ArcFaceLoss(nn.Module):
-
-    def __init__(self, embedding_size: int, num_classes: int, margin: float = 0.5, scale: float = 64.0, easy_margin: bool = False):
-        super().__init__()
-        self.embedding_size = embedding_size
-        self.num_classes = num_classes
-        self.margin = margin
-        self.scale = scale
-        self.easy_margin = easy_margin
-
-        # Weight matrix of shape [embedding_size, num_classes]
-        self.weight = nn.Parameter(torch.FloatTensor(embedding_size, num_classes))
-        nn.init.xavier_uniform_(self.weight)
-
-        # Pre-compute cos(m) and sin(m)
-        self.cos_m = torch.cos(margin.clone().detach())
-        self.sin_m = torch.sin(margin.clone().detach())
-        # For numerical stability of phi when cos(theta) <= threshold
-        self.th = torch.cos(torch.pi - margin)
-        self.mm = torch.sin(torch.pi - margin) * margin
-
-    def forward(self, embeddings: torch.Tensor, labels: torch.LongTensor = None) -> torch.Tensor:
-        """
-        embeddings: [batch_size, embedding_size]
-        labels:     [batch_size]
-        """
-        loss = None
-        logits = None
-
-        # Normalize features and weights
-        embeddings = F.normalize(embeddings, p=2, dim=1)                # [B, d]
-        W = F.normalize(self.weight, p=2, dim=0)                         # [d, C]
-
-        # Compute cosine similarity: [B, C]
-        cosine = embeddings @ W
-
-        # Inference
-        if labels is None:
-            logits = cosine * self.scale
-            return loss, logits
-                                                  
-        sine = torch.sqrt(1.0 - cosine.clamp(-1, 1) ** 2)                
-
-        # phi = cos(theta + m) formula
-        phi = cosine * self.cos_m - sine * self.sin_m                     
-
-        if self.easy_margin:
-            # use phi when cosine > 0, else use cosine
-            phi = torch.where(cosine > 0, phi, cosine)                    
-        else:
-            # use phi when cosine > threshold, else use cosine - mm
-            phi = torch.where(cosine > self.th, phi, cosine - self.mm)    
-
-        # One-hot encode labels
-        one_hot = F.one_hot(labels, num_classes=self.num_classes).float()  
-
-        # Combine logits: target logits get phi, others get cosine
-        logits = (one_hot * phi) + ((1.0 - one_hot) * cosine)              
-        logits *= self.scale                                               
-
-        # Cross-entropy loss
-        loss = F.cross_entropy(logits, labels)                             
-        return loss, logits
 
 # MLP in transformer encoder
 class MLP(nn.Module):
@@ -107,7 +43,7 @@ class TransformerEncoderLayer(nn.Module):
         
         self.ln_1 = nn.LayerNorm(config.d_model)        
         self.temporal_attention = nn.MultiheadAttention(config.d_model, config.n_temporal_heads, batch_first=True, dropout=config.dropout) 
-
+        self.channel_attention = nn.MultiheadAttention(config.seq_len, config.n_channel_heads, batch_first=True, dropout=config.dropout)
         self.ln_2 = nn.LayerNorm(config.d_model)
         self.mlp = MLP(config)
 
@@ -117,7 +53,9 @@ class TransformerEncoderLayer(nn.Module):
         # After attention and attention norm - B x seq_len x d_model
         src_normalized = self.ln_1(src)
 
-        src = src + self.temporal_attention(src_normalized, src_normalized, src_normalized)[0]
+        src = src + (self.temporal_attention(src_normalized, src_normalized, src_normalized)[0] + 
+                     self.channel_attention(src_normalized.transpose(-1, -2), src_normalized.transpose(-1, -2), 
+                                            src_normalized.transpose(-1, -2))[0].transpose(-1, -2))
         # src = self.ln_1(src)
         src = src + self.mlp(self.ln_2(src))
         # src = self.ln_2(src)
@@ -189,11 +127,8 @@ class Model(nn.Module):
             nn.Linear((config.seq_len * config.d_model) // 2, config.d_model),
             nn.ReLU()
         )
-        if config.loss_func == 'ce':
-            self.classifier = nn.Linear(config.d_model, config.n_users, bias=False) # Final Classification layer
-        else:
-            self.arcface = ArcFaceLoss(embedding_size=config.d_model, num_classes=config.n_users, 
-                                       margin=config.arcface_margin, scale=config.arcface_scale, easy_margin=True)
+
+        self.classifier = nn.Linear(config.d_model, config.n_users, bias=False) # Final Classification layer
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -264,26 +199,20 @@ class Model(nn.Module):
         # print(f"After Linear Projection mean: {out.mean()} | std: {out.std()}")
 
         # B x n_users
-        logits = None
+        logits = self.classifier(out)
 
         # print(f"After Logits mean: {logits.mean()} | std: {logits.std()}")
         
         # Loss initialized as None
         loss = None
+        cos_loss = None
+        cross_entropy_loss = None
 
         if targets is not None:
+            
             # Cross entropy loss
-            if self.config.loss_func == 'ce':
-                logits = self.classifier(out)
-                loss = F.cross_entropy(logits, targets)
-            elif self.config.loss_func == 'af':
-                loss, logits = self.arcface(embeddings=out, labels=targets)
-        else:
-            if self.config.loss_func == 'ce':
-                logits = self.classifier(out)
-            elif self.config.loss_func == 'af':
-                _, logits = self.arcface(embeddings=out)
-        
+            loss = F.cross_entropy(logits, targets)
+
         # Return embeddings, logits and loss
         return out, logits, loss 
     
