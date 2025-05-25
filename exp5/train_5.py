@@ -112,7 +112,8 @@ if __name__ == "__main__":
         d_model= 64, # Num. of features
         seq_len= 200, # Block size/seq. length
         n_temporal_heads= 4, # Num. of temporal heads
-        dropout=0.3,
+        n_channel_heads=4,
+        dropout=0.2,
         n_layers= 1, # Number of layers or transformer encoders
         n_users = 79, # Number of users (For classification)
         contrastive_loss_alpha = 1 # Contrastive loss importance hyperparameter (Alpha)
@@ -204,9 +205,8 @@ if __name__ == "__main__":
     step_count = 0
     start_epoch = 0
     eers = []
-
     # Resuming Training
-    cp = torch.load("./exp3/train_3_0_epoch_19.pt", weights_only=False)
+    cp = torch.load("./exp5/train_5_0_epoch_19.pt", weights_only=False)
 
     model = Model(cp['config'])
     model.load_state_dict(cp['model'])
@@ -217,7 +217,6 @@ if __name__ == "__main__":
     start_epoch = 20
     step_count = optimizer_steps_per_epoch * 20
     print("Resuming Training | step_count", step_count, " | start_epoch", start_epoch)
-
 
     for epoch in range(start_epoch, n_epochs):
         loss_accum = 0.0
@@ -265,7 +264,7 @@ if __name__ == "__main__":
             'optimizer': optimizer.state_dict(),
             'eers': eers,
             'config': model_config
-        },f"./exp3/train_3_0_epoch_{epoch}.pt")
+        },f"./exp5/train_5_0_epoch_{epoch}.pt")
 
 
         

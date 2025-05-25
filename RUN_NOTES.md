@@ -147,6 +147,7 @@ Cross Entropy Loss: train_1.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: Mahalonobis EER: 7.74%
 
 - train_1_1.pt
+    - max_lr = 6e-4, min_lr = 6e-5, warm_up_steps = 2 epochs
     - Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 32]
         - Divided it also to train and test sequences with 20% test sequences.
     - Tested on 10 users (v1_merged_validation_users_data) 
@@ -162,7 +163,7 @@ Cross Entropy Loss: train_1.py
 ## exp 2
 Cross Entropy Loss: train_2.py
 
-- train_2_0_epoch_9.pt: 
+- train_2_0_epoch_9.pt: (6e-4 to 6e-5)
     -  Training on 79 user dataset (v1_merged_training_users_data) [Cross Entropy Loss] [BatchSize: 32]
         - Add dropout of 0.2, and weight decay of 0.1, and trained on the entire 79 users (No test sequence division)
      - Tested on 10 users (v1_merged_test_users_data)
@@ -178,28 +179,40 @@ Cross Entropy Loss: train_2.py
 # exp 3
 Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
 
+6e-4 to 6e-5 (first 10 epoch) | 6e-5 to 6e-6 (next 10 epoch) | 6e-5 to 6e-6 (next 10 epochs)
 - train_3_0_epoch_19.pt: 
     - Tested on 10 users (v1_merged_test_users_data)
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5797**
         - When taking equal number of imposter sequences per user: **1.8637**
 
+- train_3_0_epoch_29.pt:
+    - 6e-5 to 6e-6 again
+    - All Imp: 2.3928
+
 # exp 4
 Cross Entropy Loss: train_4.py:  Dropout 0.2, Add Channel Head Attention
 
+6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
 - train_4_0_epoch_29.pt: 
     - Tested on 10 users (v1_merged_test_users_data)
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.4347**
         - When taking equal number of imposter sequences per user: **2.1603**
 
 
+# exp5:  With CNN instead of MLP
+6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
+    - 2.93 (All Imp.) | 2.76(Equal Imp.)
+
 
 Results: 
 |  Exp| Maha. EER (All Imp.)| Maha. EER (Equal Imp.)|
 |---|---|---|
-|  exp 1 - 10 epochs - Normal Transformer (CE Loss)       |4.9671|3.8478|
-|  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1 |2.5005|2.3303| 
-|  exp 3 - 20 epochs - Increase Dropout to 0.3            |2.5797|**1.8637**|
-|  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn |**2.4347**|2.1603|
+|  exp 1 - 10 epochs - Normal Transformer (CE Loss)(train_1_1.pt)                     |4.9671|3.8478|
+|  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1(train_2_0_epoch_19.pt)      |2.5005|2.3303| 
+|  exp 3 - 20 epochs - Increase Dropout to 0.3(train_3_0_epoch_19.pt)                 |2.5797|1.8637|
+|  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |**2.3928**|**1.6916**|
+|  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn (train_4_0_epoch_29.pt)     |2.4347|2.1603|
+|  exp 5 - 30 epochs - Dropout 0.2, Add CNN from exp4 (train_5_0_epoch_29.pt)         |2.93|2.76|
 
 
 
