@@ -176,6 +176,11 @@ Cross Entropy Loss: train_2.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5005**
         - When taking equal number of imposter sequences per user: **2.3303**
 
+- train_2_1_epoch_49.pt:
+    - First 10 epochs: 6e-4 to 6e-5 (2 epoch warmup), Next 10 epochs: 6e-5 to 6e-6, Next 30 epochs: 6e-6 to 6e-7
+    - All Imp. Sequences: **2.4751**
+    - Equal Num.: **2.3797**
+
 # exp 3
 Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
 
@@ -209,6 +214,7 @@ Results:
 |---|---|---|
 |  exp 1 - 10 epochs - Normal Transformer (CE Loss)(train_1_1.pt)                     |4.9671|3.8478|
 |  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1(train_2_0_epoch_19.pt)      |2.5005|2.3303| 
+|  exp 2_1 - 50 epochs - Dropout 0.2, Weight Decay: 0.1(train_2_1_epoch_49.pt)        |2.4751|2.3797| 
 |  exp 3 - 20 epochs - Increase Dropout to 0.3(train_3_0_epoch_19.pt)                 |2.5797|1.8637|
 |  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |**2.3928**|**1.6916**|
 |  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn (train_4_0_epoch_29.pt)     |2.4347|2.1603|
@@ -216,9 +222,14 @@ Results:
 
 
 
+Notes -
+ 
+When 10 epochs were done from 6e-4 to 6e-5, Validation eer at the end of 10 epoch was 5.07 for exp2, and 4.86 for exp3
+But when 20 epoches from 6e-4 to 6e-5 were done, Validation eer at the end of 10 epoch was 7.65 for exp 4 and 6.63 for exp 5
 
-
-
+-- 
+First 10 epoch: 6e-4 to 6e-5, 
+Then go from 6e-5 to 6e-6 (Properly) over 40 epochs.
 -----------------------------
 [Test Dataset Stats]
 User: 0: Num. of sessions: 8

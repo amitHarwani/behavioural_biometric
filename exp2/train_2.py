@@ -122,7 +122,7 @@ if __name__ == "__main__":
     batch_size = 32 # Batch size
     actual_batch_size = 32
     accum_steps = actual_batch_size // batch_size
-    n_epochs = 20 # Number of epochs
+    n_epochs = 30 # Number of epochs
     overlap_len = 100
     version = "v1"
     
@@ -178,9 +178,9 @@ if __name__ == "__main__":
 
     print("steps_per_epoch", steps_per_epoch, "optimizer_steps_per_epoch", optimizer_steps_per_epoch, "total_steps_to_train", total_steps_to_train)
 
-    max_lr = 6e-5 # 0.0006 # 1e-4
+    max_lr = 6e-6 # 0.0006 # 1e-4
     min_lr = max_lr * 0.1 # 0.00006
-    warmup_steps = optimizer_steps_per_epoch * 2 # 10% of total steps
+    warmup_steps = 0 # 10% of total steps
 
     # Cosine decay with linear warmup learning rate schedule
     def get_lr(iteration):
@@ -204,12 +204,10 @@ if __name__ == "__main__":
     step_count = 0
     start_epoch = 0
 
-    train_accuracies = []
-    test_accuracies = []
     eers = []
 
     # Resuming Training
-    cp = torch.load("./exp2/train_2_0_epoch_9.pt", weights_only=False)
+    cp = torch.load("./exp2/train_2_1_epoch_19.pt", weights_only=False)
 
     model = Model(cp['config'])
     model.load_state_dict(cp['model'])
@@ -217,8 +215,6 @@ if __name__ == "__main__":
     optimizer = model.configure_optimizers(0.1, max_lr, device=device)
     optimizer.load_state_dict(cp['optimizer'])
     eers = cp['eers']
-    start_epoch = 10
-    step_count = (optimizer_steps_per_epoch * 10) + 1
     print("Resuming Training | step_count", step_count, " | start_epoch", start_epoch)
 
     for epoch in range(start_epoch, n_epochs):
@@ -251,9 +247,9 @@ if __name__ == "__main__":
 
                 optimizer.zero_grad() # Zeroing the gradients
 
-                torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
+                # torch.cuda.synchronize() # wait for GPU to complete the work synchronizing with the CPU
 
-                print(f"step {step_count} | lr: {lr} | loss: {loss_accum.item():.6f} | norm: {norm:.4f}")
+                print(f"step {step_count} | lr: {lr} | loss: {loss_accum.item():.6f} | norm: {norm:.4f} | {loss_accum.item()} | {norm}")
                 print("--")
                 loss_accum = 0.0
                 step_count += 1
@@ -266,10 +262,8 @@ if __name__ == "__main__":
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
             'eers': eers,
-            'train_accuracies': train_accuracies,
-            'test_accuracies': test_accuracies,
             'config': model_config
-        },f"./exp2/train_2_0_epoch_{epoch}.pt")
+        },f"./exp2/train_2_1_epoch_{epoch + 20}.pt")
 
 
         
