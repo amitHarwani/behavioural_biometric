@@ -176,7 +176,7 @@ Cross Entropy Loss: train_2.py
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.5005**
         - When taking equal number of imposter sequences per user: **2.3303**
 
-- train_2_1_epoch_49.pt:
+- train_2_1_epoch_49.pt (Fresh Run From Start):
     - First 10 epochs: 6e-4 to 6e-5 (2 epoch warmup), Next 10 epochs: 6e-5 to 6e-6, Next 30 epochs: 6e-6 to 6e-7
     - All Imp. Sequences: **2.4751**
     - Equal Num.: **2.3797**
@@ -191,22 +191,32 @@ Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
         - When taking equal number of imposter sequences per user: **1.8637**
 
 - train_3_0_epoch_29.pt:
-    - 6e-5 to 6e-6 again
-    - All Imp: 2.3928
+    - Continued Training From train_3_0_epoch_19.pt : 6e-5 to 6e-6 again
+    - All Imp: **2.3928**
+    - Equal Num.: **1.6916**
+
+- train_3_1_epoch_49.pt:
+    - Continued Training From train_3_0_epoch_29.pt : 6e-6 to 6e-7 for 20 epochs
+    - All Imp: **2.2767**
+    - Equal Num.: **1.8508**
 
 # exp 4
 Cross Entropy Loss: train_4.py:  Dropout 0.2, Add Channel Head Attention
 
-6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
 - train_4_0_epoch_29.pt: 
+    - 6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
     - Tested on 10 users (v1_merged_test_users_data)
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.4347**
         - When taking equal number of imposter sequences per user: **2.1603**
 
 
 # exp5:  With CNN instead of MLP
-6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
-    - 2.93 (All Imp.) | 2.76(Equal Imp.)
+
+- train_5_0_epoch_29.pt: 
+    - 6e-4 to 6e-5 (First 20 epoch) | 6e-5 to 6e-6 (Next 10 epoch)
+    - All Imp. : **2.93**
+    - Equal Imp: **2.76**
+        
 
 
 Results: 
@@ -216,11 +226,13 @@ Results:
 |  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1(train_2_0_epoch_19.pt)      |2.5005|2.3303| 
 |  exp 2_1 - 50 epochs - Dropout 0.2, Weight Decay: 0.1(train_2_1_epoch_49.pt)        |2.4751|2.3797| 
 |  exp 3 - 20 epochs - Increase Dropout to 0.3(train_3_0_epoch_19.pt)                 |2.5797|1.8637|
-|  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |**2.3928**|**1.6916**|
+|  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |2.3928|**1.6916**|
+|  exp 3_1 - 50 epochs - (train_3_0_epoch_49.pt)                                      |**2.2767**|**1.8508**|
 |  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn (train_4_0_epoch_29.pt)     |2.4347|2.1603|
 |  exp 5 - 30 epochs - Dropout 0.2, Add CNN from exp4 (train_5_0_epoch_29.pt)         |2.93|2.76|
 
 
+Any run with _1 => Proper learning rate when resuming
 
 Notes -
  
