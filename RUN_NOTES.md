@@ -209,6 +209,10 @@ Cross Entropy Loss: train_4.py:  Dropout 0.2, Add Channel Head Attention
         - All Imp. Sequences: 50% for enrollment and 50% for verify: **2.4347**
         - When taking equal number of imposter sequences per user: **2.1603**
 
+- train_4_1_epoch_49.pt (Fresh Run From Start):
+    - First 10 epochs: 6e-4 to 6e-5 (2 epoch warmup), Next 10 epochs: 6e-5 to 6e-6, Next 30 epochs: 6e-6 to 6e-7
+    - All Imp. Sequences: **2.5568**
+    - Equal Num.: **2.2364**
 
 # exp5:  With CNN instead of MLP
 
@@ -229,6 +233,7 @@ Results:
 |  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |2.3928|**1.6916**|
 |  exp 3_1 - 50 epochs - (train_3_0_epoch_49.pt)                                      |**2.2767**|**1.8508**|
 |  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn (train_4_0_epoch_29.pt)     |2.4347|2.1603|
+|  exp 4_1 - 50 epochs - Dropout 0.3,  (train_4_1_epoch_49.pt)                        |2.5568|2.2364|
 |  exp 5 - 30 epochs - Dropout 0.2, Add CNN from exp4 (train_5_0_epoch_29.pt)         |2.93|2.76|
 
 

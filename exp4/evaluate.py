@@ -53,7 +53,7 @@ if __name__ == "__main__":
     version = "v1"
     test_dataset_file = f"{version}_test_users_data_tw10ms.pickle"
     test_dataset_merged_file = f"{version}_merged_test_users_data_tw10ms.pickle"
-    cp_files = ["./exp4/train_4_0_epoch_29.pt"]
+    cp_files = ["./exp4/train_4_1_epoch_49.pt"]
 
       # If the preprocessed files have been merged
     if os.path.exists(test_dataset_merged_file) :
