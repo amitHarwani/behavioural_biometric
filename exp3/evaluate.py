@@ -8,7 +8,7 @@ from collections import defaultdict
 
 from train_3 import merge_sequences_overlap
 from model_basic import Model, ModelConfig
-from validation import validate
+from validation import validate, validate_multi
 
 
 def normalize_and_init_dataset(data, screen_dim_x, screen_dim_y, split="train"):
@@ -89,9 +89,15 @@ if __name__ == "__main__":
         model.load_state_dict(cp['model'])
         model.to(device)
 
-        avg_cosine_eer, avg_maha_eer = validate(model, test_sequences, test_user_ids, test_user_to_indices, device=device, all_imp=False)
+        # multi_results = validate_multi(model, test_sequences, test_user_ids, test_user_to_indices, device=device, group_sizes=(2, 3, 4, 5, 6, 7, 8, 9))
+        # print(multi_results)
+        # import pickle
+        # with open(f"./exp3/res/multi_user_results.pickle",'wb') as outfile:
+        #     pickle.dump(multi_results, outfile)
 
-        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f}")
+        avg_cosine_eer, avg_maha_eer, avg_cosine_auc, avg_maha_auc = validate(model, test_sequences, test_user_ids, test_user_to_indices, device=device, all_imp=True, plot=True, get_cosine_score=False)
+
+        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_cosine_auc: {avg_cosine_auc} | avg_maha_auc: {avg_maha_auc}")
         print("**********************************************************************************************************")
 
 

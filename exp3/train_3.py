@@ -21,7 +21,7 @@ from sklearn.model_selection import train_test_split
 
 from model_basic import ModelConfig, Model
 from data_loader import get_training_dataloader, get_validation_dataloader
-from validation import validate, estimate_train_loss
+from validation import validate
 
 # import sys
 
