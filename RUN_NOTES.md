@@ -201,6 +201,7 @@ Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
     - Equal Num.: **1.8508**
 
 - train_3_2 (train_3_2_epoch_39):
+    - 5 Layers Than the 1 layer of 3_1
     - 6e-4 to 6e-5 with 2 epoch warmup (First 10 epochs), 6e-5 to 6e-6 (Next 10), 6e-6 to 6e-7 (Next 30)
     - All Imp: **1.9106** 
     - Performance drops in epoch 49
