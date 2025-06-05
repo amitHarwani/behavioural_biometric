@@ -79,7 +79,6 @@ def score_user(enroll_emb, verify_emb, precision=None, get_cosine_score=True, ge
     if get_l2_score:
         # L2 (Euclidean) scores
         l2_distances = torch.cdist(verify_emb, enroll_emb, p=2)  # Pairwise L2 distances
-        print("l2_distances shape", l2_distances.shape)
         l2_scores = -l2_distances.mean(dim=1).cpu().numpy()  # Negate to align with similarity-based metrics
 
     return cos_scores, maha_scores, l2_scores
@@ -89,6 +88,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
     model.eval()
     cos_eers, mah_eers, l2_eers = [], [], []
     cos_aucs, mah_aucs, l2_aucs = [], [], []
+    fawis, frwis, tcrs, usability_agg = [], [], [], []
     all_user_embs = []
     all_user_labels = []
     for u, sequence_indices in val_user_to_indices.items():
@@ -140,6 +140,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         eer_c, auc_c = None, None
         eer_m, auc_m = None, None
         eer_l2, auc_l2 = None, None
+        fawi = None
 
         if get_cosine_score:
             eer_c, _, auc_c = compute_eer(
@@ -150,10 +151,20 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
             cos_aucs.append(auc_c)
 
         if get_maha_score: 
-            eer_m, _, auc_m = compute_eer(
+            eer_m, threshold_m, auc_m = compute_eer(
                 np.concatenate([np.ones_like(mah_g), np.zeros_like(mah_i)]),
                 np.concatenate([mah_g, mah_i]), plot=plot
             )
+            fawi = calculate_FAWI(scores=mah_i, threshold=threshold_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
+            tcr = calculate_TCR(scores=mah_i, threshold=threshold_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
+            frwi = calculate_FRWI(scores=mah_g, threshold=threshold_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
+            usability = calculate_usability(scores=mah_g, threshold=threshold_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
+            
+
+            fawis.append(fawi)
+            tcrs.append(tcr)
+            frwis.append(frwi)
+            usability_agg.append(usability)
             mah_eers.append(eer_m)
             mah_aucs.append(auc_m)
 
@@ -165,7 +176,9 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
             l2_eers.append(eer_l2)
             l2_aucs.append(auc_l2)
 
-        print(f"User: {u} | EERs: | cosine: {eer_c}  | maha: {eer_m} | l2: {eer_l2} | cosine_auc: {auc_c} | maha_auc: {auc_m} | l2_auc: {auc_l2}")
+        print(f"User: {u} | EERs: | cosine: {eer_c}  | maha: {eer_m} | l2: {eer_l2}")
+        print(f"User: {u} | cosine_auc: {auc_c} | maha_auc: {auc_m} | l2_auc: {auc_l2}")
+        print(f"User: {u} | fawi: {fawi}ms | frwi: {frwi}ms | tcr: {tcr}ms | usability: {usability}")
     model.train()
 
     if plot: 
@@ -173,7 +186,9 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         all_user_labels = np.array(all_user_labels, dtype=int)
         plot_tsne_with_ellipses(embeddings=all_user_embs, labels=all_user_labels, title="")
 
-    return np.mean(cos_eers), np.mean(mah_eers), np.mean(l2_eers), np.mean(cos_aucs), np.mean(mah_aucs), np.mean(l2_aucs)
+    return (np.mean(cos_eers), np.mean(mah_eers), np.mean(l2_eers), 
+            np.mean(cos_aucs), np.mean(mah_aucs), np.mean(l2_aucs), 
+            np.mean(fawis), np.mean(frwis), np.mean(tcrs), np.mean(usability_agg))
 
 
 
@@ -230,6 +245,7 @@ def validate_multi(
     # Loop over each desired group size
     for k in group_sizes:
         mah_eer_list = [] # Authentication metric - Maha. EER
+        maha_auc_list = []
         id_acc_list = [] # Identification metric
 
         group_combinations_count = 0
@@ -244,7 +260,7 @@ def validate_multi(
 
             # Pre‐compute "outside‐group" verification embeddings once
             outside_users = [w for w in all_users if w not in group]
-            out_ver_list = [enr_embs[w] for w in outside_users]
+            out_ver_list = [ver_embs[w] for w in outside_users]
             out_ver_all = torch.cat(out_ver_list, dim=0)  # (sum_{w∉G} n_verify_w, d_model)
 
             # For each user u in G, gather:
@@ -256,11 +272,11 @@ def validate_multi(
                 P_u = precisions[u]        # (d_model, d_model)
 
                 # 2.1a) Genuine scores for u
-                _, mah_g = score_user(e_u, v_u, P_u, get_cosine_score=False)
+                _, mah_g, _ = score_user(e_u, v_u, P_u, get_cosine_score=False, get_l2_score=False)
                 genuine_scores.append(mah_g)
 
                 # 2.1b) Impostor scores for u (all outside‐group ver vs. enroll_u)
-                _, mah_i = score_user(e_u, out_ver_all, P_u, get_cosine_score=False)
+                _, mah_i, _ = score_user(e_u, out_ver_all, P_u, get_cosine_score=False, get_l2_score=False)
                 impostor_scores.append(mah_i)
 
 
@@ -273,8 +289,9 @@ def validate_multi(
                 [np.ones_like(genuine_scores), np.zeros_like(impostor_scores)]
             )
             y_score = np.concatenate([genuine_scores, impostor_scores])
-            eer_m, _thr_m, _ = compute_eer(y_true, y_score)
+            eer_m, _thr_m, auc_m = compute_eer(y_true, y_score)
             mah_eer_list.append(eer_m)
+            maha_auc_list.append(auc_m)
 
 
             # Identification accuracy within group G
@@ -309,7 +326,7 @@ def validate_multi(
                     # Enrollment embeddings and covariance of this user
                     e_v, P_v = per_user_model[v]
 
-                    _, mah_vu = score_user(e_v, v_u, P_v, get_cosine_score=False)
+                    _, mah_vu, _ = score_user(e_v, v_u, P_v, get_cosine_score=False, get_l2_score=False)
                     # mah_vu is a NumPy 1D array of length n_ver_u; convert to tensor:
                     mah_matrix[:, idx_v] = torch.from_numpy(mah_vu)
 
@@ -322,17 +339,128 @@ def validate_multi(
                 total += n_ver_u
 
             if total > 0:
-                id_acc = correct / total * 100.0
+                id_acc = (correct / total) * 100.0
                 id_acc_list.append(id_acc)
 
         # 2.b) After iterating all groups of size k, average results
         avg_mah_eer = float(np.mean(mah_eer_list)) if mah_eer_list else None
+        avg_mah_auc = float(np.mean(maha_auc_list)) if maha_auc_list else None
         avg_id_acc  = float(np.mean(id_acc_list))  if id_acc_list  else None
 
-        results[k] = {"mah_eer": avg_mah_eer, "id_acc": avg_id_acc, "count": group_combinations_count}
+        results[k] = {"mah_eer": avg_mah_eer, "maha_auc": avg_mah_auc, "id_acc": avg_id_acc, "count": group_combinations_count}
 
     model.train()
     return results
+
+def calculate_FAWI(scores, threshold, time_period, labels):
+    # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
+    preds = list(map(lambda x: 0 if x < threshold else 1, scores))
+    # To store false accept intervals
+    values = []
+    # Current false accept time
+    time = 0
+    # Active: Whether a false accept is active
+    active = False
+    for i,pred in enumerate(preds):
+        # If the user is actually authorized: Continue
+        if (labels[i] == 1): 
+            continue
+        # For Unauthorized users
+        # If the prediction is unauthorized but active flag is true i.e. False Accept did happen
+        if (pred == 0 and active):
+            values.append(time) # Append time to values
+            time = 0  # Reset time
+            active = False # Set Active to false
+        # If prediction is authorized
+        elif (pred == 1): 
+            # Add to time and set active to true
+            time = time + time_period 
+            if (not(active)):
+                active = True
+    
+    # Appending false acceptance at the end of sequences if any
+    if active and time > 0:
+        values.append(time)
+
+    # Return the false acceptance worse interval
+    return max(values) if len(values) != 0 else 0 
+
+
+def calculate_FRWI(scores, threshold, time_period, labels):
+    # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
+    preds = list(map(lambda x: 0 if x < threshold else 1, scores))
+    # To store false reject intervals
+    values = []
+    # Current false reject time
+    time = 0
+    # Active: Whether a false reject is ongoing
+    active = False
+    for i,pred in enumerate(preds):
+        # If the user is unauthorized: Continue
+        if (labels[i] == 0):
+            continue
+        # For authorized users
+        # If the prediction is authorized but active flag is true i.e. False Reject did happen in the past
+        if (pred == 1 and active):
+            values.append(time) # Append time to values
+            time = 0 # Reset time
+            active = False # Set active to false
+        # If the prediction is unauthorized
+        elif (pred == 0):
+            # Add to time and set active to true
+            time = time + time_period
+            if (not(active)):
+                active = True
+    
+    # Appending false acceptance at the end of sequences if any
+    if active and time > 0:
+        values.append(time)
+
+    return max(values) if len(values) != 0 else 0 # Convert to minutes
+
+def calculate_TCR(scores, threshold, time_period, labels):
+    # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
+    preds = list(map(lambda x: 0 if x < threshold else 1, scores))
+    values = []
+    time = 0
+    active = False
+    for i,pred in enumerate(preds):
+        # If the user is authorized continue
+        if (labels[i] == 1):
+            continue
+        # For unauthorized users
+        # If the prediction is unauthorized and active is true (i.e. there has been an false accept)
+        if (pred == 0 and active):
+            # Append to values and reset time and active flag
+            values.append(time)
+            time = 0
+            active = False
+        # If the predicton is authorized: Add to time and set active to true
+        elif (pred == 1):
+            time = time + time_period
+            if (not(active)):
+                active = True
+
+    # Return average of times
+    return np.mean(values) if len(values) != 0 else 0
+
+
+def calculate_usability(scores, threshold, time_period, labels):
+    preds = list(map(lambda x: 0 if x < threshold else 1, scores))
+    total_time = 0
+    accepted_time = 0
+    for i,pred in enumerate(preds):
+        # If the user is actually unauthorized: Continue
+        if (labels[i] == 0):
+            continue
+        # For authorized users
+        # Add to total time
+        total_time = total_time + time_period
+        # If the user is predicted as authorized correctly
+        # Add to accepted time
+        if (pred == 1):
+            accepted_time = accepted_time + time_period
+    return accepted_time/total_time if total_time != 0 else 0
 
 
 def plot_tsne(embeddings: np.ndarray,
