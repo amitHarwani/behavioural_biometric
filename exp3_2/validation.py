@@ -10,7 +10,7 @@ from sklearn.metrics import roc_curve, roc_auc_score, silhouette_score
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from data_loader import get_validation_dataloader, get_testing_dataloader
-from model_basic import Model, ModelConfig
+from model_3_2 import Model, ModelConfig
 from matplotlib.patches import Patch, Ellipse
 
 
@@ -54,8 +54,10 @@ def embed_sessions(model: Model, val_sequences, val_user_ids,device, batch_size)
     return torch.cat(embs, dim=0)
 
 @torch.no_grad()
-def score_user(enroll_emb, verify_emb, precision=None, get_cosine_score=True):
+def score_user(enroll_emb, verify_emb, precision=None, get_cosine_score=True, get_maha_score=True, get_l2_score=True):
     cos_scores = None
+    maha_scores = None
+    l2_scores = None
 
     if get_cosine_score: 
         # Cosine scores
@@ -64,22 +66,29 @@ def score_user(enroll_emb, verify_emb, precision=None, get_cosine_score=True):
         ) # Cosine similarity between verify and enrollment embeddings
         cos_scores = cos_mat.mean(dim=1).cpu().numpy() # Averaging for each verification session (n_samples_ver)
 
-    # Mahalanobis scores if precision provided
-    if precision is not None:
-        centered = verify_emb - enroll_emb.mean(0, keepdim=True) # Centering the verify_embedding
-        # vectorized mahala: (x @ P * x).sum(dim=1)
-        maha = -torch.einsum('bi,ij,bj->b', centered, precision, centered)
-        maha_scores = maha.cpu().numpy()
-    else:
-        maha_scores = None
+    if get_maha_score:
+        # Mahalanobis scores if precision provided
+        if precision is not None:
+            centered = verify_emb - enroll_emb.mean(0, keepdim=True) # Centering the verify_embedding
+            # vectorized mahala: (x @ P * x).sum(dim=1)
+            maha = -torch.einsum('bi,ij,bj->b', centered, precision, centered)
+            maha_scores = maha.cpu().numpy()
+        else:
+            maha_scores = None
+    
+    if get_l2_score:
+        # L2 (Euclidean) scores
+        l2_distances = torch.cdist(verify_emb, enroll_emb, p=2)  # Pairwise L2 distances
+        print("l2_distances shape", l2_distances.shape)
+        l2_scores = -l2_distances.mean(dim=1).cpu().numpy()  # Negate to align with similarity-based metrics
 
-    return cos_scores, maha_scores
+    return cos_scores, maha_scores, l2_scores
 
 @torch.no_grad()
-def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, device, batch_size=16, all_imp = True, plot=False, get_cosine_score=True, num_of_enroll_seqs=None):
+def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, device, batch_size=16, all_imp = True, plot=False, get_cosine_score=True, get_maha_score=True, get_l2_score=True, num_of_enroll_seqs=None):
     model.eval()
-    cos_eers, mah_eers = [], []
-    cos_aucs, mah_aucs = [], []
+    cos_eers, mah_eers, l2_eers = [], [], []
+    cos_aucs, mah_aucs, l2_aucs = [], [], []
     all_user_embs = []
     all_user_labels = []
     for u, sequence_indices in val_user_to_indices.items():
@@ -89,6 +98,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         #(n_seqs, d_model)
         all_emb = embed_sessions(model=model, val_sequences=user_sequences, val_user_ids=[u] * len(user_sequences), device=device, batch_size=batch_size)
 
+        # Num of enroll sequences if it's passed or split into half
         split_point = num_of_enroll_seqs if (num_of_enroll_seqs is not None and len(all_emb) > num_of_enroll_seqs) else len(all_emb) // 2
         # embeddings
         e_emb = all_emb[:split_point, :] # (n_samples, d_model)
@@ -104,7 +114,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         ) # Covariance matrix of the centered embeddings
 
         # genuine scores
-        cos_g, mah_g = score_user(e_emb, v_emb, P, get_cosine_score=get_cosine_score)
+        cos_g, mah_g, l2_g = score_user(e_emb, v_emb, P, get_cosine_score=get_cosine_score, get_maha_score=get_maha_score, get_l2_score=get_l2_score)
         # impostor: pool all other users' first verify samples
         imp_emb = []
 
@@ -124,10 +134,13 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         
         print(f"User: {u} | # enrollment: {len(e_emb)} | # verify: {len(v_emb)} | # imposter: {len(imp_emb)}")
 
-        cos_i, mah_i = score_user(e_emb, imp_emb, P, get_cosine_score=get_cosine_score)
+        cos_i, mah_i, l2_i = score_user(e_emb, imp_emb, P, get_cosine_score=get_cosine_score, get_maha_score=get_maha_score, get_l2_score=get_l2_score)
 
         # compute EERs
         eer_c, auc_c = None, None
+        eer_m, auc_m = None, None
+        eer_l2, auc_l2 = None, None
+
         if get_cosine_score:
             eer_c, _, auc_c = compute_eer(
                 np.concatenate([np.ones_like(cos_g), np.zeros_like(cos_i)]),
@@ -136,14 +149,23 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
             cos_eers.append(eer_c)
             cos_aucs.append(auc_c)
 
-        eer_m, _, auc_m = compute_eer(
-            np.concatenate([np.ones_like(mah_g), np.zeros_like(mah_i)]),
-            np.concatenate([mah_g, mah_i]), plot=plot
-        )
-        mah_eers.append(eer_m)
-        mah_aucs.append(auc_m)
+        if get_maha_score: 
+            eer_m, _, auc_m = compute_eer(
+                np.concatenate([np.ones_like(mah_g), np.zeros_like(mah_i)]),
+                np.concatenate([mah_g, mah_i]), plot=plot
+            )
+            mah_eers.append(eer_m)
+            mah_aucs.append(auc_m)
 
-        print(f"User: {u} | EERs: | cosine: {eer_c}  | maha: {eer_m} | cosine_auc: {auc_c} | maha_auc: {auc_m}")
+        if get_l2_score: 
+            eer_l2, _, auc_l2 = compute_eer(
+                np.concatenate([np.ones_like(l2_g), np.zeros_like(l2_i)]),
+                np.concatenate([l2_g, l2_i]), plot=plot
+            )
+            l2_eers.append(eer_l2)
+            l2_aucs.append(auc_l2)
+
+        print(f"User: {u} | EERs: | cosine: {eer_c}  | maha: {eer_m} | l2: {eer_l2} | cosine_auc: {auc_c} | maha_auc: {auc_m} | l2_auc: {auc_l2}")
     model.train()
 
     if plot: 
@@ -151,7 +173,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         all_user_labels = np.array(all_user_labels, dtype=int)
         plot_tsne_with_ellipses(embeddings=all_user_embs, labels=all_user_labels, title="")
 
-    return np.mean(cos_eers), np.mean(mah_eers), np.mean(cos_aucs), np.mean(mah_aucs)
+    return np.mean(cos_eers), np.mean(mah_eers), np.mean(l2_eers), np.mean(cos_aucs), np.mean(mah_aucs), np.mean(l2_aucs)
 
 
 

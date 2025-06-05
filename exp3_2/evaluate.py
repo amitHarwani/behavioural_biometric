@@ -6,8 +6,8 @@ import pickle
 import numpy as np
 from collections import defaultdict
 
-from train_3 import merge_sequences_overlap
-from model_basic import Model, ModelConfig
+from train_3_2 import merge_sequences_overlap
+from model_3_2 import Model, ModelConfig
 from validation import validate, validate_multi
 
 
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     version = "v1"
     test_dataset_file = f"{version}_test_users_data_tw10ms.pickle"
     test_dataset_merged_file = f"{version}_merged_test_users_data_tw10ms.pickle"
-    cp_files = ["./exp3/train_3_1_epoch_49.pt"]
+    cp_files = ["./exp3_2/train_3_2_epoch_39.pt"]
 
       # If the preprocessed files have been merged
     if os.path.exists(test_dataset_merged_file) :
@@ -95,12 +95,10 @@ if __name__ == "__main__":
         # with open(f"./exp3/res/multi_user_results.pickle",'wb') as outfile:
         #     pickle.dump(multi_results, outfile)
 
-        avg_cosine_eer, avg_maha_eer, avg_cosine_auc, avg_maha_auc = validate(model, test_sequences, test_user_ids, test_user_to_indices, device=device, all_imp=True, plot=False, get_cosine_score=False)
+        avg_cosine_eer, avg_maha_eer, avg_l2_eer, avg_cosine_auc, avg_maha_auc, avg_l2_auc = validate(model=model, val_sequences=test_sequences, val_user_ids=test_user_ids, 
+                                                                                                      val_user_to_indices=test_user_to_indices, device=device, all_imp=True, 
+                                                                                                      plot=False, get_cosine_score=True, get_maha_score=True, get_l2_score=True, 
+                                                                                                      num_of_enroll_seqs=None)
 
-        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_cosine_auc: {avg_cosine_auc} | avg_maha_auc: {avg_maha_auc}")
+        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_l2_eer: {avg_l2_eer} | avg_cosine_auc: {avg_cosine_auc} | avg_maha_auc: {avg_maha_auc} | avg_l2_auc: {avg_l2_auc}")
         print("**********************************************************************************************************")
-
-
-
-
-

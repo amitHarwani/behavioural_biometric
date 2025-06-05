@@ -200,6 +200,11 @@ Cross Entropy Loss: train_3.py: Changed Dropout to 0.3.
     - All Imp: **2.2767**
     - Equal Num.: **1.8508**
 
+- train_3_2 (train_3_2_epoch_39):
+    - 6e-4 to 6e-5 with 2 epoch warmup (First 10 epochs), 6e-5 to 6e-6 (Next 10), 6e-6 to 6e-7 (Next 30)
+    - All Imp: **1.9106** 
+    - Performance drops in epoch 49
+
 # exp 4
 Cross Entropy Loss: train_4.py:  Dropout 0.2, Add Channel Head Attention
 
@@ -230,8 +235,9 @@ Results:
 |  exp 2 - 20 epochs - Add Dropout 0.2, Weight Decay: 0.1(train_2_0_epoch_19.pt)      |2.5005|2.3303| 
 |  exp 2_1 - 50 epochs - Dropout 0.2, Weight Decay: 0.1(train_2_1_epoch_49.pt)        |2.4751|2.3797| 
 |  exp 3 - 20 epochs - Increase Dropout to 0.3(train_3_0_epoch_19.pt)                 |2.5797|1.8637|
-|  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |2.3928|**1.6916**|
-|  exp 3_1 - 50 epochs - (train_3_0_epoch_49.pt)                                      |**2.2767**|**1.8508**|
+|  exp 3 - 30 epochs - (train_3_0_epoch_29.pt)                                        |2.3928|1.6916|
+|  exp 3_1 - 50 epochs - (train_3_1_epoch_49.pt)                                      |2.2767|1.8508|
+|  exp 3_2 - 40 epochs - (train_3_2_epoch_39.pt)                                      |**1.9106**|
 |  exp 4 - 30 epochs - Dropout 0.2, Add Channel Head Attn (train_4_0_epoch_29.pt)     |2.4347|2.1603|
 |  exp 4_1 - 50 epochs - Dropout 0.3,  (train_4_1_epoch_49.pt)                        |2.5568|2.2364|
 |  exp 5 - 30 epochs - Dropout 0.2, Add CNN from exp4 (train_5_0_epoch_29.pt)         |2.93|2.76|
