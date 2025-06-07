@@ -244,7 +244,7 @@ Results:
 |  exp 5 - 30 epochs - Dropout 0.2, Add CNN from exp4 (train_5_0_epoch_29.pt)         |2.93|2.76|
 
 
-Any run with _1 => Proper learning rate when resuming
+Any run with _1 or greater than it => Proper learning rate when resuming
 
 Notes -
  
@@ -256,6 +256,18 @@ First 10 epoch: 6e-4 to 6e-5,
 Then go from 6e-5 to 6e-6 (Properly) over 40 epochs.
 -----------------------------
 [Test Dataset Stats]
+| User | Total Number of Sequences |
+| ---- | ------------------------- |
+| 0    | 3,055                     |
+| 1    | 5,673                     |
+| 2    | 81                        |
+| 3    | 3,618                     |
+| 4    | 6,832                     |
+| 5    | 3,847                     |
+| 6    | 2,768                     |
+| 7    | 3,133                     |
+| 8    | 3,792                     |
+| 9    | 3,835                     |
 User: 0: Num. of sessions: 8
          Session: 0: Number of Sequences: 309
          Session: 1: Number of Sequences: 292

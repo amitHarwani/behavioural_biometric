@@ -30,7 +30,7 @@ def compute_eer(y_true, y_score, plot=False):
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.plot([0, 100], [0, 100], "--", color="gray", alpha=0.7)  # reference diagonal
         plt.tight_layout()
-        plt.savefig(f"./exp3/res/{eer}.png")
+        plt.savefig(f"./exp3_2/res/{eer}.png")
 
     auc = roc_auc_score(y_true, y_score) # Area under the curve
 
@@ -104,8 +104,8 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         e_emb = all_emb[:split_point, :] # (n_samples, d_model)
         v_emb = all_emb[split_point:, :] # (n_samples, d_model)
         if plot:
-            all_user_embs.append(v_emb.numpy())
-            all_user_labels.extend([u] * v_emb.size(0))
+            all_user_embs.append(e_emb.numpy())
+            all_user_labels.extend([u] * e_emb.size(0))
 
         # precision for Mahalanobis
         centered = e_emb - e_emb.mean(0, True) # Centering the enrollment embeddings
@@ -153,7 +153,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
         if get_maha_score: 
             eer_m, threshold_m, auc_m = compute_eer(
                 np.concatenate([np.ones_like(mah_g), np.zeros_like(mah_i)]),
-                np.concatenate([mah_g, mah_i]), plot=plot
+                np.concatenate([mah_g, mah_i]), plot=False
             )
             fawi = calculate_FAWI(scores=mah_i, threshold=threshold_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
             tcr = calculate_TCR(scores=mah_i, threshold=threshold_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
@@ -184,7 +184,7 @@ def validate(model, val_sequences, val_user_ids, val_user_to_indices: dict, devi
     if plot: 
         all_user_embs = np.vstack(all_user_embs)
         all_user_labels = np.array(all_user_labels, dtype=int)
-        plot_tsne_with_ellipses(embeddings=all_user_embs, labels=all_user_labels, title="")
+        plot_tsne(embeddings=all_user_embs, labels=all_user_labels, title="")
 
     return (np.mean(cos_eers), np.mean(mah_eers), np.mean(l2_eers), 
             np.mean(cos_aucs), np.mean(mah_aucs), np.mean(l2_aucs), 
@@ -201,6 +201,7 @@ def validate_multi(
     device,
     batch_size=16,
     group_sizes=(2, 3, 4, 5),
+    num_of_enroll_seqs=None
 ):
     """
     Multi‐user Mahalanobis validation with group‐level precision and identification via score_user().
@@ -208,6 +209,7 @@ def validate_multi(
     model.eval()
 
     # --- 1) Precompute per‐user enrollment & verification embeddings ---
+    all_embs = {}
     enr_embs = {}
     ver_embs = {}
     precisions = {}
@@ -222,11 +224,14 @@ def validate_multi(
             batch_size=batch_size,
         )  # (n_samples_of_user, d_model)
 
-        split_pt = len(all_emb) // 2 # Splitting into enrollment and verification by half
+        # split_pt = len(all_emb) // 2 # Splitting into enrollment and verification by half
+        split_pt = num_of_enroll_seqs if (num_of_enroll_seqs is not None and len(all_emb) > num_of_enroll_seqs) else len(all_emb) // 2
+        print(f"Split Point", split_pt)
         e_emb = all_emb[:split_pt].clone()   # (n_enroll_u, d_model)
         v_emb = all_emb[split_pt:].clone()   # (n_verify_u, d_model)
 
         # Storing in dictionary
+        all_embs[u] = all_emb
         enr_embs[u] = e_emb
         ver_embs[u] = v_emb
 
@@ -246,6 +251,7 @@ def validate_multi(
     for k in group_sizes:
         mah_eer_list = [] # Authentication metric - Maha. EER
         maha_auc_list = []
+        mah_fawi_list, mah_tcr_list, mah_frwi_list, mah_usability_list = [], [], [], []
         id_acc_list = [] # Identification metric
 
         group_combinations_count = 0
@@ -260,7 +266,7 @@ def validate_multi(
 
             # Pre‐compute "outside‐group" verification embeddings once
             outside_users = [w for w in all_users if w not in group]
-            out_ver_list = [ver_embs[w] for w in outside_users]
+            out_ver_list = [all_embs[w][len(all_emb[w]) // 2:] for w in outside_users]
             out_ver_all = torch.cat(out_ver_list, dim=0)  # (sum_{w∉G} n_verify_w, d_model)
 
             # For each user u in G, gather:
@@ -290,8 +296,20 @@ def validate_multi(
             )
             y_score = np.concatenate([genuine_scores, impostor_scores])
             eer_m, _thr_m, auc_m = compute_eer(y_true, y_score)
+            
+            # Continuous Metrics
+            fawi = calculate_FAWI(scores=mah_i, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
+            tcr = calculate_TCR(scores=mah_i, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
+            frwi = calculate_FRWI(scores=mah_g, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
+            usability = calculate_usability(scores=mah_g, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
+
             mah_eer_list.append(eer_m)
             maha_auc_list.append(auc_m)
+
+            mah_fawi_list.append(fawi)
+            mah_tcr_list.append(tcr)
+            mah_frwi_list.append(frwi)
+            mah_usability_list.append(usability)
 
 
             # Identification accuracy within group G
@@ -345,14 +363,22 @@ def validate_multi(
         # 2.b) After iterating all groups of size k, average results
         avg_mah_eer = float(np.mean(mah_eer_list)) if mah_eer_list else None
         avg_mah_auc = float(np.mean(maha_auc_list)) if maha_auc_list else None
+        avg_mah_fawi = float(np.mean(mah_fawi_list)) if mah_fawi_list else None
+        avg_mah_tcr = float(np.mean(mah_tcr_list)) if mah_tcr_list else None
+        avg_mah_frwi = float(np.mean(mah_frwi_list)) if mah_frwi_list else None
+        avg_mah_usability = float(np.mean(mah_usability_list)) if mah_usability_list else None
+        
         avg_id_acc  = float(np.mean(id_acc_list))  if id_acc_list  else None
 
-        results[k] = {"mah_eer": avg_mah_eer, "maha_auc": avg_mah_auc, "id_acc": avg_id_acc, "count": group_combinations_count}
+        results[k] = {"mah_eer": avg_mah_eer, "maha_auc": avg_mah_auc, "id_acc": avg_id_acc, 
+                      "mah_fawi": avg_mah_fawi, "mah_tcr": avg_mah_tcr, "mah_frwi": avg_mah_frwi,
+                      "mah_usability": avg_mah_usability,"count": group_combinations_count}
 
     model.train()
     return results
 
 def calculate_FAWI(scores, threshold, time_period, labels):
+    time_period = (time_period * 10) # Converting sequence length to ms
     # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
     preds = list(map(lambda x: 0 if x < threshold else 1, scores))
     # To store false accept intervals
@@ -387,6 +413,7 @@ def calculate_FAWI(scores, threshold, time_period, labels):
 
 
 def calculate_FRWI(scores, threshold, time_period, labels):
+    time_period = (time_period * 10) # Converting sequence length to ms
     # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
     preds = list(map(lambda x: 0 if x < threshold else 1, scores))
     # To store false reject intervals
@@ -419,6 +446,7 @@ def calculate_FRWI(scores, threshold, time_period, labels):
     return max(values) if len(values) != 0 else 0 # Convert to minutes
 
 def calculate_TCR(scores, threshold, time_period, labels):
+    time_period = (time_period * 10) # Converting sequence length to ms
     # Predictions: Greather than threshold is authorized, less than threshold is unauthorized
     preds = list(map(lambda x: 0 if x < threshold else 1, scores))
     values = []
@@ -446,6 +474,7 @@ def calculate_TCR(scores, threshold, time_period, labels):
 
 
 def calculate_usability(scores, threshold, time_period, labels):
+    time_period = (time_period * 10) # Converting sequence length to ms
     preds = list(map(lambda x: 0 if x < threshold else 1, scores))
     total_time = 0
     accepted_time = 0
@@ -483,7 +512,7 @@ def plot_tsne(embeddings: np.ndarray,
             if len(user_idx) > max_per_label:
                 chosen = user_idx[:max_per_label]
                 # randomly pick max_per_user indices for this user
-                # chosen = rng.choice(user_idx, size=50, replace=False)
+                # chosen = rng.choice(user_idx, size=max_per_label, replace=False)
             else:
                 # keep all if ≤ max_per_user
                 chosen = user_idx
