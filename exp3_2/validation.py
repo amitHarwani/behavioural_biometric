@@ -226,7 +226,6 @@ def validate_multi(
 
         # split_pt = len(all_emb) // 2 # Splitting into enrollment and verification by half
         split_pt = num_of_enroll_seqs if (num_of_enroll_seqs is not None and len(all_emb) > num_of_enroll_seqs) else len(all_emb) // 2
-        print(f"Split Point", split_pt)
         e_emb = all_emb[:split_pt].clone()   # (n_enroll_u, d_model)
         v_emb = all_emb[split_pt:].clone()   # (n_verify_u, d_model)
 
@@ -266,7 +265,7 @@ def validate_multi(
 
             # Pre‐compute "outside‐group" verification embeddings once
             outside_users = [w for w in all_users if w not in group]
-            out_ver_list = [all_embs[w][len(all_emb[w]) // 2:] for w in outside_users]
+            out_ver_list = [all_embs[w][len(all_embs[w]) // 2:] for w in outside_users]
             out_ver_all = torch.cat(out_ver_list, dim=0)  # (sum_{w∉G} n_verify_w, d_model)
 
             # For each user u in G, gather:
