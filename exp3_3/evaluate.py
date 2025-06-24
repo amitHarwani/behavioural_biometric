@@ -92,17 +92,17 @@ if __name__ == "__main__":
         multi_results = validate_multi(model, test_sequences, test_user_ids, test_user_to_indices, device=device, group_sizes=(2, 3, 4, 5, 6, 7, 8, 9))
         print(multi_results)
         import pickle
-        with open(f"./exp3_3/res/multi_user_results.pickle",'wb') as outfile:
+        with open(f"./exp3_3/res/multi_user_results_2.pickle",'wb') as outfile:
             pickle.dump(multi_results, outfile)
 
-        avg_cosine_eer, avg_maha_eer, avg_l2_eer, avg_cosine_auc, avg_maha_auc, avg_l2_auc, avg_fawi, avg_frwi, avg_tcr, avg_usability = validate(model=model, val_sequences=test_sequences, val_user_ids=test_user_ids, 
-                                                                                                      val_user_to_indices=test_user_to_indices, device=device, all_imp=True, 
-                                                                                                      plot=False, get_cosine_score=False, get_maha_score=True, get_l2_score=False, 
-                                                                                                      num_of_enroll_seqs=None)
+        # avg_cosine_eer, avg_maha_eer, avg_l2_eer, avg_cosine_auc, avg_maha_auc, avg_l2_auc, avg_fawi, avg_frwi, avg_tcr, avg_usability = validate(model=model, val_sequences=test_sequences, val_user_ids=test_user_ids, 
+        #                                                                                               val_user_to_indices=test_user_to_indices, device=device, all_imp=True, 
+        #                                                                                               plot=False, get_cosine_score=False, get_maha_score=True, get_l2_score=False, 
+        #                                                                                               num_of_enroll_seqs=None)
 
-        print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_l2_eer: {avg_l2_eer}")
-        print(f"avg_cosine_auc: {avg_cosine_auc} | avg_maha_auc: {avg_maha_auc} | avg_l2_auc: {avg_l2_auc}")
-        print(f"avg_fawi: {avg_fawi} | avg_frwi: {avg_frwi} | avg_tcr: {avg_tcr} | avg_usability: {avg_usability}")
+        # print(f"CP: {cp_file} | Test Results: avg_cosine_eer: {avg_cosine_eer:.4f} | avg_maha_eer: {avg_maha_eer:.4f} | avg_l2_eer: {avg_l2_eer}")
+        # print(f"avg_cosine_auc: {avg_cosine_auc} | avg_maha_auc: {avg_maha_auc} | avg_l2_auc: {avg_l2_auc}")
+        # print(f"avg_fawi: {avg_fawi} | avg_frwi: {avg_frwi} | avg_tcr: {avg_tcr} | avg_usability: {avg_usability}")
 
         # for n_seqs in [150, 300, 450, 600, 750, 900, 1050, 1200, 1350]:
         #     print("Enrollment Sequences", n_seqs)

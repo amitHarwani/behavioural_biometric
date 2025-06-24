@@ -297,10 +297,10 @@ def validate_multi(
             eer_m, _thr_m, auc_m = compute_eer(y_true, y_score)
             
             # Continuous Metrics
-            fawi = calculate_FAWI(scores=mah_i, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
-            tcr = calculate_TCR(scores=mah_i, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(mah_i))
-            frwi = calculate_FRWI(scores=mah_g, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
-            usability = calculate_usability(scores=mah_g, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(mah_g))
+            fawi = calculate_FAWI(scores=impostor_scores, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(impostor_scores))
+            tcr = calculate_TCR(scores=impostor_scores, threshold=_thr_m, time_period=model.config.seq_len, labels=np.zeros_like(impostor_scores))
+            frwi = calculate_FRWI(scores=genuine_scores, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(genuine_scores))
+            usability = calculate_usability(scores=genuine_scores, threshold=_thr_m, time_period=model.config.seq_len, labels=np.ones_like(genuine_scores))
 
             mah_eer_list.append(eer_m)
             maha_auc_list.append(auc_m)
