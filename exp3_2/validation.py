@@ -265,6 +265,7 @@ def validate_multi(
 
             # Pre‐compute "outside‐group" verification embeddings once
             outside_users = [w for w in all_users if w not in group]
+            # outside_users = outside_users[:2] # Uncomment for taking only 2 imposters.
             out_ver_list = [all_embs[w][len(all_embs[w]) // 2:] for w in outside_users]
             out_ver_all = torch.cat(out_ver_list, dim=0)  # (sum_{w∉G} n_verify_w, d_model)
 
