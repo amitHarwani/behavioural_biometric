@@ -1,4 +1,4 @@
-# Behavioural Biometric Experiments — HMOG Implementation
+# Multi-User Multi-Modal Continuous Authentication using Behavioural Biometrics 
 
 This repository contains preprocessing, training, evaluation and experiments for behavioual-biometric authentication using the HMOG public dataset. It includes preprocessing utilities, multiple experiment variants (exp1..exp5), model definitions, training scripts, evaluation and result notes.
 
